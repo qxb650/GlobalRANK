@@ -1,18 +1,5 @@
-import numpy as np
-from types import SimpleNamespace
-import jax
+
 import jax.numpy as jnp
-import optax
-from flax import nnx
-from jax import random
-import time
-import os
-from tools import gauss_hermite
-import matplotlib.pyplot as plt
-
-from solve import train_SS
-from neural_nets import Policy
-
 
 # def compute_linearized_IRF(model, shock):
 
@@ -619,4 +606,35 @@ def OccBin(par, states, P, A_ZLB, B_ZLB, C_ZLB, D_ZLB, K_ZLB, T_max, print_=Fals
 
 #     i_shadow = taylor_rule(par, pi, u, ZLB)
 
-#     return i-i_shadow
+# #     return i-i_shadow
+
+#         # shocks
+#         common_sigma_state = 0.1
+
+#         # MP-shock: pushes up nominal interest rate 1:1
+#         par["rho_u"] = 0.9747
+#         par["sigma_eps_u"] = compute_sigma_eps(par["rho_u"], common_sigma_state)
+#         par["mu_u"] = 0.0
+
+#         # Demand shock: shock to MU in period t
+#         par["rho_z"] = 0.9
+#         par["sigma_eps_z"] = compute_sigma_eps(par["rho_z"], common_sigma_state)
+#         par["mu_z"] = 0.0 # compute_log_AR_mean(par["z_DSS"], par["rho_z"], par["sigma_eps_z"])
+
+#         # Supply shock: shock to MC
+#         par["rho_Gamma"] = 0.7559
+#         par["sigma_eps_Gamma"] = compute_sigma_eps(par["rho_Gamma"], common_sigma_state)
+#         par["mu_Gamma"] = 0.0 # compute_log_AR_mean(par["ln_Gamma_DSS"], par["rho_Gamma"], par["sigma_eps_Gamma"])
+
+#         # shocks: matrix form:
+#         par["Rho"] = jnp.array([
+#             [par["rho_u"], 0.0, 0.0],
+#             [0.0, par["rho_z"], 0.0],
+#             [0.0, 0.0, par["rho_Gamma"]]
+#             ])
+
+#         par["Mu"] = jnp.array([
+#             [par["mu_u"]],
+#             [par["mu_z"]],
+#             [par["mu_Gamma"]]
+#         ])

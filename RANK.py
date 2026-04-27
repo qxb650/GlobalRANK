@@ -1,11 +1,8 @@
 import numpy as np
 from types import SimpleNamespace
-import jax
 import jax.numpy as jnp
 import optax
 from flax import nnx
-from jax import random
-import time
 import os
 import matplotlib.pyplot as plt
 import pickle
@@ -31,74 +28,44 @@ class RANK_model:
         par = {}
 
         # parameters of baseline model that could be estimated
+        par["alpha"] = 0.33
         par["sigma"] = 1.0
         par["beta"] = 0.99
         par["epsilon"] = 9.0
         par["varphi"] = 5.0
-        par["theta"] = 1.0
+        par["theta"] = 0.1
 
-        par["kappa"] = par["epsilon"]/par["theta"]
+        par["kappa"] = par["epsilon"]/90 #par["theta"] FIX THETA
         par["mu"] = (par["epsilon"])/(par["epsilon"]-1)
 
         # CB parameters to be calibrated
         par["phi_y"] = 0.5
         par["phi_pi"] = 1.5
-        par["ZLB"] = -0.005 #05
-        par["pi_target"] = 0.00
+        par["ZLB"] = 0.00
         par["do_lin_taylor_rule"] = False
         par["do_DSS_as_Ystar"] = False
 
         # DSS
-        par["Y_DSS"] = (1/par["mu"])**(1/(par["sigma"]+par["varphi"]))
-        par["pi_DSS"] = par["pi_target"]
-        par["i_DSS"] = (1/par["beta"])*(1+par["pi_target"]) - 1 #1/par["beta"] - 1 + par["pi_target"]
+        par["Y_DSS"] = ((1-par["alpha"])/par["mu"])**((1-par["alpha"])/(par["varphi"]+par["alpha"]+par["sigma"]-par["alpha"]*par["sigma"]))
+        par["pi_DSS"] = 0.00
+        par["i_DSS"] = 1/par["beta"] - 1
         par["u_DSS"] = 0.0
         par["z_DSS"] = 0.0
         par["ln_Gamma_DSS"] = 0.0
 
         # shocks
-        common_sigma_state = 0.1
-
-        # MP-shock: pushes up nominal interest rate 1:1
-        par["rho_u"] = 0.9
-        par["sigma_eps_u"] = compute_sigma_eps(par["rho_u"], common_sigma_state)
-        par["mu_u"] = 0.0
-
-        # Demand shock: shock to MU in period t
+        par["rho_u"] = 0.44
         par["rho_z"] = 0.9
-        par["sigma_eps_z"] = compute_sigma_eps(par["rho_z"], common_sigma_state)
-        par["mu_z"] = 0.0 # compute_log_AR_mean(par["z_DSS"], par["rho_z"], par["sigma_eps_z"])
-
-        # Supply shock: shock to MC
-        par["rho_Gamma"] = 0.9
-        par["sigma_eps_Gamma"] = compute_sigma_eps(par["rho_Gamma"], common_sigma_state)
-        par["mu_Gamma"] = 0.0 # compute_log_AR_mean(par["ln_Gamma_DSS"], par["rho_Gamma"], par["sigma_eps_Gamma"])
-
-        # shocks: matrix form:
-        par["Rho"] = jnp.array([
-            [par["rho_u"], 0.0, 0.0],
-            [0.0, par["rho_z"], 0.0],
-            [0.0, 0.0, par["rho_Gamma"]]
-            ])
-
-        par["Mu"] = jnp.array([
-            [par["mu_u"]],
-            [par["mu_z"]],
-            [par["mu_Gamma"]]
-        ])
+        par["rho_Gamma"] = 0.7559
 
         # model
-        par["Nshocks"] = 3 # eps_i, eps_z, eps_Gamma
-        par["Nstates"] = 3 # u_i, z, ln_Gamma
+        par["Nshocks"] = 3 # eps_u, eps_z, eps_Gamma
+        par["Nstates"] = 3 # u, z, ln_Gamma
         par["Npolicies"] = 2 # Y, pi
 
         self.par = par
 
-        #self.DSS = compute_DSS(par, do_print=False)
-
     def setup_train(self):
-
-        par = self.par
 
         train = {}
 
@@ -111,19 +78,19 @@ class RANK_model:
         train["do_ZLB_dummy"] = True
         train["do_shadow_taylor_rule"] = False
 
-        train["T_OccBin"] = 100
+        train["T_OccBin"] = 150
         train["n_grid_OccBin"] = 100 # + 1 in linear
         train["states_std_interp"] = 0.05
 
         # quadrature
-        train["gh_x"], train["gh_w"] = construct_gh_nodes(
-                                                train["gh_n_per_shock"],
-                                                par["sigma_eps_u"],
-                                                par["sigma_eps_z"],
-                                                par["sigma_eps_Gamma"]
-                                                )
+        # train["gh_x"], train["gh_w"] = construct_gh_nodes(
+        #                                         train["gh_n_per_shock"],
+        #                                         par["sigma_eps_u"],
+        #                                         par["sigma_eps_z"],
+        #                                         par["sigma_eps_Gamma"]
+        #                                         )
 
-        train["gh_n"] = len(train["gh_w"])
+        train["gh_n"] = train["gh_n_per_shock"]**3 # len(train["gh_w"])
 
         self.train = train
 
@@ -174,46 +141,53 @@ class RANK_model:
         self.nn = nn
         self.opt = opt
 
-    def compute_IRF(self, shock, T):
+    def compute_IRF(self, shocks, rtol=50):
 
         par = self.par
         train = self.train
         linear = self.linear
         nn = self.nn
 
-        Nstates = par["Nstates"]
-        Npolicies = par["Npolicies"]
-        Nshocks = par["Nshocks"]
+        rho_u = par["rho_u"]
+        rho_z = par["rho_z"]
+        rho_Gamma = par["rho_Gamma"]
 
+        T_u = int(10*jnp.ceil(-jnp.log(rtol)/(10*jnp.log(rho_u))).item())
+        T_z = int(10*jnp.ceil(-jnp.log(rtol)/(10*jnp.log(rho_z))).item())
+        T_Gamma = int(10*jnp.ceil(-jnp.log(rtol)/(10*jnp.log(rho_Gamma))).item())
+        
         # compute SSS
         Y_SSS, pi_SSS = eval_nn(par, train, linear, nn, jnp.zeros((1, 3)), 1)
 
-        zeros = jnp.zeros((T, 1))
-
         # MP shock
-        u_shock = shock * par["rho_u"]**jnp.arange(T) #+ #par["mu_u"]
+        zeros = jnp.zeros((T_u, 1))
+        u_shock = shocks[0] * rho_u**jnp.arange(T_u) #+ #par["mu_u"]
         u_shock_states = jnp.concat([u_shock[:, None], zeros, zeros], axis=-1) # (T, 3)
-        out_Y_u, out_pi_u = eval_nn(par, train, linear, nn, u_shock_states, T)
+        out_Y_u, out_pi_u = eval_nn(par, train, linear, nn, u_shock_states, T_u)
         IRF_Y_u = out_Y_u - Y_SSS
         IRF_pi_u = out_pi_u - pi_SSS
 
         # preference shock
-        z_shock = shock * par["rho_z"]**jnp.arange(T) #+ #par["mu_z"]
+        zeros = jnp.zeros((T_z, 1))
+        z_shock = shocks[1] * rho_z**jnp.arange(T_z) #+ #par["mu_z"]
         z_shock_states = jnp.concat([zeros, z_shock[:, None], zeros], axis=-1)
-        out_Y_z, out_pi_z = eval_nn(par, train, linear, nn, z_shock_states, T)
+        out_Y_z, out_pi_z = eval_nn(par, train, linear, nn, z_shock_states, T_z)
         IRF_Y_z = out_Y_z - Y_SSS
         IRF_pi_z = out_pi_z - pi_SSS
 
         # productivity shock
-        ln_Gamma_shock = shock * par["rho_Gamma"]**jnp.arange(T) #+ #par["mu_Gamma"]
+        zeros = jnp.zeros((T_Gamma, 1))
+        ln_Gamma_shock = shocks[2] * rho_Gamma**jnp.arange(T_Gamma) #+ #par["mu_Gamma"]
         ln_Gamma_shock_states = jnp.concat([zeros, zeros, ln_Gamma_shock[:, None]], axis=-1)
-        out_Y_Gamma, out_pi_Gamma = eval_nn(par, train, linear, nn, ln_Gamma_shock_states, T)
+        out_Y_Gamma, out_pi_Gamma = eval_nn(par, train, linear, nn, ln_Gamma_shock_states, T_Gamma)
         IRF_Y_ln_Gamma = out_Y_Gamma - Y_SSS
         IRF_pi_ln_Gamma = out_pi_Gamma - pi_SSS
 
         IRF = SimpleNamespace()
 
-        IRF.T = T
+        IRF.T_u = T_u
+        IRF.T_z = T_z
+        IRF.T_Gamma = T_Gamma
 
         IRF.u = u_shock
         IRF.z = z_shock
@@ -236,8 +210,9 @@ class RANK_model:
         linear = self.linear
         IRF = self.IRF
 
-        T = IRF.T
-        ts = jnp.arange(T)
+        T_u = IRF.T_u
+        T_z = IRF.T_z
+        T_Gamma = IRF.T_Gamma
         P = linear["P"]
 
         Y_interp_OccBin, pi_interp_OccBin = linear["Y_interp_OccBin"], linear["pi_interp_OccBin"]
@@ -245,45 +220,45 @@ class RANK_model:
         f, ax = plt.subplots(3, 3, figsize=(12, 12))
 
         # shocks (1st row)
-        ax[0,0].plot(ts, IRF.u)
-        ax[0,1].plot(ts, IRF.z)
-        ax[0,2].plot(ts, IRF.ln_Gamma)
+        ax[0,0].plot(jnp.arange(T_u), IRF.u)
+        ax[0,1].plot(jnp.arange(T_z), IRF.z)
+        ax[0,2].plot(jnp.arange(T_Gamma), IRF.ln_Gamma)
 
         ax[0,0].set_title(r'$u_t$')
         ax[0,1].set_title(r'$z_t$')
         ax[0,2].set_title(r'$\ln(\Gamma_t)$')
 
         # nn: Y (2nd row)
-        ax[1,0].plot(ts, IRF.Y_u, label='DEQN')
-        ax[1,1].plot(ts, IRF.Y_z, label='DEQN')
-        ax[1,2].plot(ts, IRF.Y_ln_Gamma, label='DEQN')
+        ax[1,0].plot(jnp.arange(T_u), IRF.Y_u, label='DEQN')
+        ax[1,1].plot(jnp.arange(T_z), IRF.Y_z, label='DEQN')
+        ax[1,2].plot(jnp.arange(T_Gamma), IRF.Y_ln_Gamma, label='DEQN')
         for i in range(3): ax[1,i].set_title('Output')
 
         # nn: pi (3rd row)
-        ax[2,0].plot(ts, IRF.pi_u, label='DEQN')
-        ax[2,1].plot(ts, IRF.pi_z, label='DEQN')
-        ax[2,2].plot(ts, IRF.pi_ln_Gamma, label='DEQN')
+        ax[2,0].plot(jnp.arange(T_u), IRF.pi_u, label='DEQN')
+        ax[2,1].plot(jnp.arange(T_z), IRF.pi_z, label='DEQN')
+        ax[2,2].plot(jnp.arange(T_Gamma), IRF.pi_ln_Gamma, label='DEQN')
         for i in range(3): ax[2,i].set_title('Inflation')
 
         # linear: Y (2nd row)
-        ax[1,0].plot(ts, P[0,0] * IRF.u, label='linear')
-        ax[1,1].plot(ts, P[0,1] * IRF.z, label='linear')
-        ax[1,2].plot(ts, P[0,2] * IRF.ln_Gamma, label='linear')
+        ax[1,0].plot(jnp.arange(T_u), P[0,0] * IRF.u, label='linear')
+        ax[1,1].plot(jnp.arange(T_z), P[0,1] * IRF.z, label='linear')
+        ax[1,2].plot(jnp.arange(T_Gamma), P[0,2] * IRF.ln_Gamma, label='linear')
 
         # linear: pi (3rd row)
-        ax[2,0].plot(ts, P[1,0] * IRF.u, label='linear')
-        ax[2,1].plot(ts, P[1,1] * IRF.z, label='linear')
-        ax[2,2].plot(ts, P[1,2] * IRF.ln_Gamma, label='linear')
+        ax[2,0].plot(jnp.arange(T_u), P[1,0] * IRF.u, label='linear')
+        ax[2,1].plot(jnp.arange(T_z), P[1,1] * IRF.z, label='linear')
+        ax[2,2].plot(jnp.arange(T_Gamma), P[1,2] * IRF.ln_Gamma, label='linear')
 
         # OccBin: Y (2nd row)
-        ax[1,0].plot(ts, Y_interp_OccBin(jnp.concatenate([IRF.u[:, None], jnp.zeros((T,2))], axis=-1)), label='OccBin', ls ='--')
-        ax[1,1].plot(ts, Y_interp_OccBin(jnp.concatenate([jnp.zeros((T,1)), IRF.z[:, None], jnp.zeros((T,1))], axis=-1)), label='OccBin', ls ='--')
-        ax[1,2].plot(ts, Y_interp_OccBin(jnp.concatenate([jnp.zeros((T,2)), IRF.ln_Gamma[:, None]], axis=-1)), label='OccBin', ls ='--')
+        ax[1,0].plot(jnp.arange(T_u), Y_interp_OccBin(jnp.concatenate([IRF.u[:, None], jnp.zeros((T_u,2))], axis=-1)), label='OccBin', ls ='--')
+        ax[1,1].plot(jnp.arange(T_z), Y_interp_OccBin(jnp.concatenate([jnp.zeros((T_z,1)), IRF.z[:, None], jnp.zeros((T_z,1))], axis=-1)), label='OccBin', ls ='--')
+        ax[1,2].plot(jnp.arange(T_Gamma), Y_interp_OccBin(jnp.concatenate([jnp.zeros((T_Gamma,2)), IRF.ln_Gamma[:, None]], axis=-1)), label='OccBin', ls ='--')
 
         # OccBin: pi (3rd row)
-        ax[2,0].plot(ts, pi_interp_OccBin(jnp.concatenate([IRF.u[:, None], jnp.zeros((T,2))], axis=-1)), label='OccBin', ls ='--')
-        ax[2,1].plot(ts, pi_interp_OccBin(jnp.concatenate([jnp.zeros((T,1)), IRF.z[:, None], jnp.zeros((T,1))], axis=-1)), label='OccBin', ls ='--')
-        ax[2,2].plot(ts, pi_interp_OccBin(jnp.concatenate([jnp.zeros((T,2)), IRF.ln_Gamma[:, None]], axis=-1)), label='OccBin', ls ='--')
+        ax[2,0].plot(jnp.arange(T_u), pi_interp_OccBin(jnp.concatenate([IRF.u[:, None], jnp.zeros((T_u,2))], axis=-1)), label='OccBin', ls ='--')
+        ax[2,1].plot(jnp.arange(T_z), pi_interp_OccBin(jnp.concatenate([jnp.zeros((T_z,1)), IRF.z[:, None], jnp.zeros((T_z,1))], axis=-1)), label='OccBin', ls ='--')
+        ax[2,2].plot(jnp.arange(T_Gamma), pi_interp_OccBin(jnp.concatenate([jnp.zeros((T_Gamma,2)), IRF.ln_Gamma[:, None]], axis=-1)), label='OccBin', ls ='--')
 
         for i in range(3):
             for j in range(3):
@@ -364,7 +339,7 @@ def gauss_hermite(n):
     # a. calculations
     i = jnp.arange(1,n)
     a = jnp.sqrt(i/2)
-    CM = jnp.diag(a,1) + np.diag(a,-1)
+    CM = jnp.diag(a,1) + jnp.diag(a,-1)
     L,V = jnp.linalg.eigh(CM)
     I = L.argsort()
     V = V[:,I].T

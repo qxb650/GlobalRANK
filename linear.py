@@ -12,7 +12,7 @@ from flax.core import FrozenDict
 from jax.scipy.stats import norm
 from jax.scipy.interpolate import RegularGridInterpolator
 from matplotlib.ticker import MaxNLocator
-from aux import draw_shocks
+from aux_ import draw_shocks
 
 from model_funcs import euler_error, NKPC_error, taylor_rule
 
@@ -214,7 +214,7 @@ def compute_OccBin_interp(par, linear, n_grid, states_sigma):
 def compute_policy_and_ZLB(par, states, P, d):
 
     X = states @ P.T + d.T # (N, 3) x (3, 2) -> (N, 2)
-    pi = X[:, 1] + par["pi_target"] # (N,)
+    pi = X[:, 1]  # (N,)
     Y = X[:, 0] + par["Y_DSS"] # REMEBER TAYLOR RULE IS MADE FOR LEVEL VARIABLES
     u = states[:, 0] # (N,)
     z = states[:, 1]
@@ -335,17 +335,24 @@ def eval_OccBin(linear, states):
 # IRFs #
 ########
 
-def compute_linear_IRFs(model, shock, T):
+def compute_linear_IRFs(model, shock, T, rtol=50):
 
     par = model.par
     linear = model.linear
 
     P = linear["P"]
 
-    zeros = jnp.zeros((T, 1))
+    rho_u = par["rho_u"]
+    rho_z = par["rho_z"]
+    rho_Gamma = par["rho_Gamma"]
+
+    T_u = int(10*jnp.ceil(-jnp.log(rtol)/(10*jnp.log(rho_u))).item())
+    T_z = int(10*jnp.ceil(-jnp.log(rtol)/(10*jnp.log(rho_z))).item())
+    T_Gamma = int(10*jnp.ceil(-jnp.log(rtol)/(10*jnp.log(rho_Gamma))).item())
 
     # MP shock
-    u_shock = shock * par["rho_u"]**jnp.arange(T)
+    zeros = jnp.zeros((T_u, 1))
+    u_shock = shock * rho_u**jnp.arange(T_u)
     u_shock_states = jnp.concat([u_shock[:, None], zeros, zeros], axis=-1)
     out_u_OccBin, exp_T_u_OccBin = OccBin(par, linear, u_shock_states)
     out_u_lin = u_shock_states @ P.T
@@ -357,7 +364,8 @@ def compute_linear_IRFs(model, shock, T):
     IRF_pi_u_lin = out_u_lin[:, 1]
 
     # preference shock
-    z_shock = shock * par["rho_z"]**jnp.arange(T)
+    zeros = jnp.zeros((T_z, 1))
+    z_shock = shock * rho_z**jnp.arange(T_z)
     z_shock_states = jnp.concat([zeros, z_shock[:, None], zeros], axis=-1)
     out_z_OccBin, exp_T_z_OccBin = OccBin(par, linear, z_shock_states)
     out_z_lin = z_shock_states @ P.T
@@ -369,7 +377,8 @@ def compute_linear_IRFs(model, shock, T):
     IRF_pi_z_lin = out_z_lin[:, 1]
 
     # productivity shock
-    ln_Gamma_shock = shock * par["rho_Gamma"]**jnp.arange(T)
+    zeros = jnp.zeros((T_Gamma, 1))
+    ln_Gamma_shock = shock * rho_Gamma**jnp.arange(T_Gamma)
     ln_Gamma_shock_states = jnp.concat([zeros, zeros, ln_Gamma_shock[:, None]], axis=-1)
     out_ln_Gamma_OccBin, exp_T_ln_Gamma_OccBin = OccBin(par, linear, ln_Gamma_shock_states)
     out_ln_Gamma_lin = ln_Gamma_shock_states @ P.T
@@ -382,12 +391,17 @@ def compute_linear_IRFs(model, shock, T):
 
     if hasattr(model, "IRF"):
         IRF = model.IRF
+
     else:
         IRF = SimpleNamespace()
 
         IRF.u = u_shock
         IRF.z = z_shock
         IRF.ln_Gamma = ln_Gamma_shock
+
+        IRF.T_u = T_u
+        IRF.T_z = T_z
+        IRF.T_Gamma = T_Gamma
 
     IRF.Y_u_OccBin = IRF_Y_u_OccBin
     IRF.pi_u_OccBin = IRF_pi_u_OccBin
@@ -413,42 +427,43 @@ def plot_linear_IRFs(model, plot_exp_T = False):
 
     IRF = model.IRF
 
-    T = IRF.Y_u_OccBin.shape[0]
-    ts = jnp.arange(T)
+    T_u = IRF.T_u
+    T_z = IRF.T_z
+    T_Gamma = IRF.T_Gamma
 
     f, ax = plt.subplots(3+int(plot_exp_T), 3, figsize=(12, 12))
 
     # shocks (du antager de ligger i IRF)
-    ax[0,0].plot(ts, IRF.u)
-    ax[0,1].plot(ts, IRF.z)
-    ax[0,2].plot(ts, IRF.ln_Gamma)
+    ax[0,0].plot(jnp.arange(T_u), IRF.u)
+    ax[0,1].plot(jnp.arange(T_z), IRF.z)
+    ax[0,2].plot(jnp.arange(T_Gamma), IRF.ln_Gamma)
 
     ax[0,0].set_title(r'$u_t$')
     ax[0,1].set_title(r'$z_t$')
     ax[0,2].set_title(r'$\ln(\Gamma_t)$')
 
     # OUTPUT (OccBin vs lin)
-    ax[1,0].plot(ts, IRF.Y_u_OccBin, label='OccBin')
-    ax[1,0].plot(ts, IRF.Y_u_lin, label='linear')
+    ax[1,0].plot(jnp.arange(T_u), IRF.Y_u_OccBin, label='OccBin')
+    ax[1,0].plot(jnp.arange(T_u), IRF.Y_u_lin, label='linear')
 
-    ax[1,1].plot(ts, IRF.Y_z_OccBin, label='OccBin')
-    ax[1,1].plot(ts, IRF.Y_z_lin, label='linear')
+    ax[1,1].plot(jnp.arange(T_z), IRF.Y_z_OccBin, label='OccBin')
+    ax[1,1].plot(jnp.arange(T_z), IRF.Y_z_lin, label='linear')
 
-    ax[1,2].plot(ts, IRF.Y_ln_Gamma_OccBin, label='OccBin')
-    ax[1,2].plot(ts, IRF.Y_ln_Gamma_lin, label='linear')
+    ax[1,2].plot(jnp.arange(T_Gamma), IRF.Y_ln_Gamma_OccBin, label='OccBin')
+    ax[1,2].plot(jnp.arange(T_Gamma), IRF.Y_ln_Gamma_lin, label='linear')
 
     for i in range(3):
         ax[1,i].set_title('Output')
 
     # INFLATION (OccBin vs lin)
-    ax[2,0].plot(ts, IRF.pi_u_OccBin, label='OccBin')
-    ax[2,0].plot(ts, IRF.pi_u_lin, label='linear')
+    ax[2,0].plot(jnp.arange(T_u), IRF.pi_u_OccBin, label='OccBin')
+    ax[2,0].plot(jnp.arange(T_u), IRF.pi_u_lin, label='linear')
 
-    ax[2,1].plot(ts, IRF.pi_z_OccBin, label='OccBin')
-    ax[2,1].plot(ts, IRF.pi_z_lin, label='linear')
+    ax[2,1].plot(jnp.arange(T_z), IRF.pi_z_OccBin, label='OccBin')
+    ax[2,1].plot(jnp.arange(T_z), IRF.pi_z_lin, label='linear')
 
-    ax[2,2].plot(ts, IRF.pi_ln_Gamma_OccBin, label='OccBin')
-    ax[2,2].plot(ts, IRF.pi_ln_Gamma_lin, label='linear')
+    ax[2,2].plot(jnp.arange(T_Gamma), IRF.pi_ln_Gamma_OccBin, label='OccBin')
+    ax[2,2].plot(jnp.arange(T_Gamma), IRF.pi_ln_Gamma_lin, label='linear')
 
     for i in range(3):
         ax[2,i].set_title('Inflation')
@@ -458,9 +473,9 @@ def plot_linear_IRFs(model, plot_exp_T = False):
             ax[i,j].legend()
 
     if plot_exp_T:
-        ax[3,0].step(ts, IRF.exp_T_u_OccBin, where='post')
-        ax[3,1].step(ts, IRF.exp_T_z_OccBin, where='post')
-        ax[3,2].step(ts, IRF.exp_T_ln_Gamma_OccBin, where='post')
+        ax[3,0].step(jnp.arange(T_u), IRF.exp_T_u_OccBin, where='post')
+        ax[3,1].step(jnp.arange(T_z), IRF.exp_T_z_OccBin, where='post')
+        ax[3,2].step(jnp.arange(T_Gamma), IRF.exp_T_ln_Gamma_OccBin, where='post')
         ax[3,0].yaxis.set_major_locator(MaxNLocator(integer=True))
         ax[3,1].yaxis.set_major_locator(MaxNLocator(integer=True))
         ax[3,2].yaxis.set_major_locator(MaxNLocator(integer=True))
@@ -475,7 +490,7 @@ def plot_linear_IRFs(model, plot_exp_T = False):
 # SIMULATION #
 ##############
 
-def simulate_linear(model, sigma_sim, T, N=1, known_states=None, key_=42, plot=False):
+def simulate_linear(model, sigmas, T, N=1, known_states=None, key_=42, plot=False):
 
     par = model.par
     linear = model.linear
@@ -484,9 +499,10 @@ def simulate_linear(model, sigma_sim, T, N=1, known_states=None, key_=42, plot=F
     P = linear["P"]
     K = linear["K"]
     key = jax.random.PRNGKey(key_)
-    sigma_sim_eps_u = (jnp.sqrt(1-par["rho_u"]**2)*sigma_sim)
-    sigma_sim_eps_z = (jnp.sqrt(1-par["rho_z"]**2)*sigma_sim)
-    sigma_sim_eps_Gamma = (jnp.sqrt(1-par["rho_Gamma"]**2)*sigma_sim)
+
+    sigma_sim_eps_u = sigmas["sigma_eps_u"]
+    sigma_sim_eps_z = sigmas["sigma_eps_z"]
+    sigma_sim_eps_Gamma = sigmas["sigma_eps_Gamma"]
 
     states = jnp.zeros((T,N,3)) + jnp.nan
     
@@ -521,14 +537,14 @@ def simulate_linear(model, sigma_sim, T, N=1, known_states=None, key_=42, plot=F
         out_lin_t = states_t @ P.T
         
         Y_lin = Y_lin.at[t, :].set(out_lin_t[:, 0] + par["Y_DSS"])
-        pi_lin = pi_lin.at[t, :].set(out_lin_t[:, 1]+ par["pi_target"]) 
-        i_lin = i_lin.at[t, :].set(taylor_rule(par, out_lin_t[:, 0]+ par["Y_DSS"], out_lin_t[:, 1]+ par["pi_target"], u, z, ln_Gamma, jnp.zeros((1,1)), jnp.zeros((1,1)), -100, jnp.ones((1,1))))
+        pi_lin = pi_lin.at[t, :].set(out_lin_t[:, 1]) 
+        i_lin = i_lin.at[t, :].set(taylor_rule(par, out_lin_t[:, 0]+ par["Y_DSS"], out_lin_t[:, 1], u, z, ln_Gamma, jnp.zeros((1,1)), jnp.zeros((1,1)), -100, jnp.ones((1,1))))
 
         out_OccBin_t, _ = OccBin(par, linear, states_t)
 
         Y_OccBin = Y_OccBin.at[t, :].set(out_OccBin_t[:, 0]+ par["Y_DSS"])
-        pi_OccBin = pi_OccBin.at[t, :].set(out_OccBin_t[:, 1]+ par["pi_target"]) 
-        i_OccBin = i_OccBin.at[t, :].set(taylor_rule(par, out_OccBin_t[:, 0]+ par["Y_DSS"], out_OccBin_t[:, 1]+ par["pi_target"], u, z, ln_Gamma, jnp.zeros((1,1)), jnp.zeros((1,1)), 0.00, jnp.ones((1,1))))
+        pi_OccBin = pi_OccBin.at[t, :].set(out_OccBin_t[:, 1]) 
+        i_OccBin = i_OccBin.at[t, :].set(taylor_rule(par, out_OccBin_t[:, 0]+ par["Y_DSS"], out_OccBin_t[:, 1], u, z, ln_Gamma, jnp.zeros((1,1)), jnp.zeros((1,1)), 0.00, jnp.ones((1,1))))
 
     if hasattr(model, "sim"):
         sim = model.sim

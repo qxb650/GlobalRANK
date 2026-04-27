@@ -4,17 +4,12 @@ import jax
 import jax.numpy as jnp
 import optax
 from flax import nnx
-from jax import random
-import time
-#import matplotlib.pyplot as plt
-import os
 from flax.core import FrozenDict
 import math
 
-from aux import draw_shocks, draw_states_directly, next_states_quad, next_states, states_test_grid
+from aux_ import draw_shocks, draw_states_directly, next_states_quad, next_states
 from model_funcs import euler_error, NKPC_error, taylor_rule
 from neural_nets import eval_nn
-from linear import OccBin, compute_linear_policy
 
 ############
 # TRAINING #
@@ -68,7 +63,7 @@ def phase_training_loop(
     def train_step(nn, opt, key):
 
         key, subkey = jax.random.split(key)
-        states = draw_states_directly(subkey, par, dtype, N, sigma_sim, zero_var=zero_var)
+        states = draw_states_directly(subkey, par, dtype, N, sigma_sim["sigma_eps_u"], sigma_sim["sigma_eps_z"], sigma_sim["sigma_eps_Gamma"])
 
         def loss_fn(m):
             ee, nkpce, _, _, _, _, _ = loss(m, par, train, linear, dtype, states, ZLB, gh_x, gh_w)
@@ -154,7 +149,7 @@ def train_nn(
     for phase in range(len(episodes)):
 
         zero_var = zero_var_list[phase]
-        states_test = draw_states_directly(test_key, par, dtype, train["Nparallel_test"], sigma_sim, zero_var=zero_var)
+        states_test = draw_states_directly(test_key, par, dtype, train["Nparallel_test"], sigma_sim["sigma_eps_u"], sigma_sim["sigma_eps_z"], sigma_sim["sigma_eps_Gamma"])
         states_test = jax.lax.stop_gradient(states_test)
 
         # a. phase-specific: #episodes, ZLB, lr, N
@@ -182,7 +177,7 @@ def train_nn(
 # SIMULATE #
 ############
 
-def simulate(model, T, shock):
+def simulate(model, T, shocks):
 
     par = model.par
     train = model.train
@@ -205,7 +200,7 @@ def simulate(model, T, shock):
     for t in range(T):
         states = states.at[t].set(states_i[0])
         key, subkey = jax.random.split(key)
-        eps = draw_shocks(subkey, dtype, 1, shock, shock, shock)
+        eps = draw_shocks(subkey, dtype, 1, shocks[0], shocks[1], shocks[2])
         states_i = next_states(par, states_i, eps)
 
     # nn
@@ -225,12 +220,12 @@ def simulate(model, T, shock):
     sim.i = taylor_rule(par, Y, pi, states[:, 0], states[:, 2], 0.0, 0.0, 0.0, 0.0, 0.00)
 
     sim.Y_lin = Y_lin + par["Y_DSS"]
-    sim.pi_lin = pi_lin + par["pi_target"]
-    sim.i_lin = taylor_rule(par, Y_lin + par["Y_DSS"], pi_lin + par["pi_target"], states[:, 0], states[:, 2], 0.0, 0.0, 0.0,-100, 0.0)
+    sim.pi_lin = pi_lin
+    sim.i_lin = taylor_rule(par, Y_lin + par["Y_DSS"], pi_lin, states[:, 0], states[:, 2], 0.0, 0.0, 0.0,-100, 0.0)
 
     sim.Y_OccBin = Y_OccBin + par["Y_DSS"]
-    sim.pi_OccBin = pi_OccBin + par["pi_target"]
-    sim.i_OccBin = taylor_rule(par, Y_OccBin + par["Y_DSS"], pi_OccBin + par["pi_target"], states[:, 0], states[:, 2], 0.0, 0.0, 0.0, 0.0, 0.0)
+    sim.pi_OccBin = pi_OccBin
+    sim.i_OccBin = taylor_rule(par, Y_OccBin + par["Y_DSS"], pi_OccBin, states[:, 0], states[:, 2], 0.0, 0.0, 0.0, 0.0, 0.0)
 
     model.sim = sim
 
