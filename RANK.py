@@ -30,7 +30,7 @@ class RANK_model:
         # parameters of baseline model that could be estimated
         par["alpha"] = 0.33
         par["sigma"] = 1.0
-        par["beta"] = 0.99
+        par["beta"] = 0.97
         par["epsilon"] = 9.0
         par["varphi"] = 5.0
         par["theta"] = 0.1
@@ -54,7 +54,7 @@ class RANK_model:
         par["ln_Gamma_DSS"] = 0.0
 
         # shocks
-        par["rho_u"] = 0.44
+        par["rho_u"] = 0.8753
         par["rho_z"] = 0.9
         par["rho_Gamma"] = 0.7559
 
@@ -203,7 +203,7 @@ class RANK_model:
 
         self.IRF = IRF
 
-    def plot_IRF(self):
+    def plot_IRF(self, save_path=None):
 
         par = self.par
         train = self.train
@@ -265,23 +265,29 @@ class RANK_model:
                 ax[i,j].legend()
 
         f.tight_layout()
-    
-    def save(self, path):
 
-        nn = self.nn
-        opt = self.opt
+        if save_path is not None:
+            f.savefig(save_path)
+    
+    def save(self, path, nn, opt=None):
 
         os.makedirs('output', exist_ok=True)
 
         _, nn_state = nnx.split(nn)
         serialised_nn = nn_state.to_pure_dict()
-        opt_state = opt.opt_state
 
-        save_dict = {
+        if opt is None:
+            save_dict = {
+            'nn' : serialised_nn,
+            }
+            
+        else:
+            opt_state = opt.opt_state
+            save_dict = {
             'nn' : serialised_nn,
             'opt' : opt_state
-        }
-        
+            }
+
         with open(path, 'wb') as f:
             pickle.dump(save_dict, f)
 
@@ -295,8 +301,6 @@ class RANK_model:
 
         nnx.update(nn, load_dict['nn'])
         opt.opt_state = load_dict['opt']
-
-        
 
 #########
 # tools #

@@ -177,7 +177,7 @@ def train_nn(
 # SIMULATE #
 ############
 
-def simulate(model, T, shocks):
+def simulate(model, T, shocks, extra_nn=None):
 
     par = model.par
     train = model.train
@@ -206,6 +206,7 @@ def simulate(model, T, shocks):
     # nn
     Y, pi = eval_nn(par, train, linear, nn, states, T)
 
+
     # linear
     out_lin = states @ linear["P"].T
     Y_lin, pi_lin = out_lin[:, 0], out_lin[:, 1]
@@ -226,6 +227,14 @@ def simulate(model, T, shocks):
     sim.Y_OccBin = Y_OccBin + par["Y_DSS"]
     sim.pi_OccBin = pi_OccBin
     sim.i_OccBin = taylor_rule(par, Y_OccBin + par["Y_DSS"], pi_OccBin, states[:, 0], states[:, 2], 0.0, 0.0, 0.0, 0.0, 0.0)
+
+    if extra_nn is not None:
+        Y_extra, pi_extra = eval_nn(par, train, linear, extra_nn, states, T)
+        sim.Y_extra = Y_extra
+        sim.pi_extra = pi_extra
+        sim.i_extra = taylor_rule(par, Y_extra, pi_extra, states[:, 0], states[:, 2], 0.0, 0.0, 0.0,-100, 0.0)
+    
+    sim.states = states
 
     model.sim = sim
 

@@ -2,17 +2,13 @@ import numpy as np
 from types import SimpleNamespace
 import jax
 import jax.numpy as jnp
-import optax
-from flax import nnx
-from jax import random
-import time
 import matplotlib.pyplot as plt
-import os
 from flax.core import FrozenDict
 from jax.scipy.stats import norm
 from jax.scipy.interpolate import RegularGridInterpolator
 from matplotlib.ticker import MaxNLocator
 from aux_ import draw_shocks
+from copy import copy
 
 from model_funcs import euler_error, NKPC_error, taylor_rule
 
@@ -125,7 +121,7 @@ def compute_linear_policy(par, ZLB_regime=False):
 
 def setup_linear(model, T_OccBin, n_grid=50, shock_interp=0.03):
 
-    par = FrozenDict(model.par)
+    par = model.par
 
     linear = dict()
 
@@ -149,7 +145,7 @@ def setup_linear(model, T_OccBin, n_grid=50, shock_interp=0.03):
     linear["D_ZLB"] = D_ZLB
     linear["K_ZLB"] = K_ZLB
 
-    # OccBin policy matrices 
+    # OccBin policy matrices
     P_ZLB_hist, d_ZLB_hist = compute_P_star(P, A_ZLB, B_ZLB, C_ZLB, D_ZLB, K_ZLB, T_OccBin)
 
     linear["P_ZLB_hist"] = P_ZLB_hist
@@ -159,6 +155,7 @@ def setup_linear(model, T_OccBin, n_grid=50, shock_interp=0.03):
     linear["T_OccBin"] = T_OccBin
 
     # OccBin interpolators
+    par = FrozenDict(par)
     out_OccBin = compute_OccBin_interp(par, linear, n_grid, shock_interp)
     linear["Y_interp_OccBin"], linear["pi_interp_OccBin"], linear["time_to_ZLB_slack_interp"], linear["max_expected_ZLB"] = out_OccBin
 
@@ -565,18 +562,40 @@ def simulate_linear(model, sigmas, T, N=1, known_states=None, key_=42, plot=Fals
     if not hasattr(model, "sim"): model.sim = sim
 
     if plot:
-        f, ax = plt.subplots(1,3, figsize=(15,5))
 
-        ax[0].plot(Y_lin, label='Linear')
-        ax[0].plot(Y_OccBin, label='OccBin')
+        f, ax = plt.subplots(2,3, figsize=(15,10))
 
-        ax[1].plot(pi_lin, label='Linear')
-        ax[1].plot(pi_OccBin, label='OccBin')
+        ax[0,0].plot(Y_lin, label='Linear')
+        ax[0,0].plot(Y_OccBin, label='OccBin', ls='--')
 
-        ax[2].plot(i_lin, label='Linear')
-        ax[2].plot(i_OccBin, label='OccBin')
+        ax[0,1].plot(pi_lin, label='Linear')
+        ax[0,1].plot(pi_OccBin, label='OccBin', ls='--')
 
-        for i in range(3): ax[i].legend()
+        ax[0,2].plot(i_lin, label='Linear')
+        ax[0,2].plot(i_OccBin, label='OccBin', ls='--')
+
+        ax[0,0].set_title(r'Output: $Y_t$')
+        ax[0,1].set_title(r'Inflation: $\pi_t$')
+        ax[0,2].set_title(r'Nominal Interest Rate: $i_t$')
+
+        ax[0,0].legend()
+
+        ax[1,0].plot(states[:,:,0])
+        ax[1,0].set_title(r'$u_t$')
+
+        ax[1,1].plot(states[:,:,1])
+        ax[1,1].set_title(r'$z_t$')
+
+        ax[1,2].plot(states[:,:,2])
+        ax[1,2].set_title(r'$\ln(\Gamma_t)$')
+
+        bounds = jnp.abs(states).max() + 0.01
+
+        for i in range(3): ax[1,i].set_ylim([-bounds, bounds])
+
+        f.tight_layout()
+
+        f.savefig('Simulation_example_lin_OccBin.png')
 
 ###################
 # ERROR FUNCTIONS #
