@@ -185,7 +185,7 @@ def compute_P_star(P, A_ZLB, B_ZLB, C_ZLB, D_ZLB, K_ZLB, T):
 def compute_OccBin_interp(par, linear, n_grid, states_sigma):
 
     n_grid = n_grid + 1 # +1 for 0.5 being contained in the grid, ppf(0.5) = 0.0
-    unit_grid = jnp.linspace(0.000001,0.999999,n_grid)
+    unit_grid = jnp.linspace(0.001,0.999,n_grid)
     u_grid = norm.ppf(unit_grid, loc=0, scale=states_sigma)
     z_grid = norm.ppf(unit_grid, loc=0, scale=states_sigma)
     ln_Gamma_grid = norm.ppf(unit_grid, loc=0, scale=states_sigma)
@@ -312,21 +312,42 @@ def simulate_OccBin(model, N, states_sigma, key_=42, return_linear_wo_OccBin=Fal
     else:
         return states, X_sol
 
+# def eval_OccBin(linear, states):
+
+#     Y_interp, pi_interp = linear["Y_interp_OccBin"], linear["pi_interp_OccBin"]
+
+#     if len(states.shape) == 2:
+#         Y = Y_interp(states)
+#         pi = pi_interp(states)
+
+#     else:
+#         N = states.shape[0]
+#         states = states.reshape(-1, 3)
+#         Y = Y_interp(states).reshape(N, -1, 2)
+#         pi = pi_interp(states).reshape(N, -1, 2)
+
+#     return Y, pi
+
 def eval_OccBin(linear, states):
-
-    Y_interp, pi_interp = linear["Y_interp_OccBin"], linear["pi_interp_OccBin"]
-
-    if len(states.shape) == 2:
-        Y = Y_interp(states)
-        pi = pi_interp(states)
-
-    else:
-        N = states.shape[0]
-        states = states.reshape(-1, 3)
-        Y = Y_interp(states).reshape(N, -1, 2)
-        pi = pi_interp(states).reshape(N, -1, 2)
-
-    return Y, pi
+    """
+    Sikker wrapper til OccBin interpolatorer.
+    Håndterer både (N, 3) og (T, N, 3) input.
+    """
+    Y_interp = linear["Y_interp_OccBin"]
+    pi_interp = linear["pi_interp_OccBin"]
+    
+    # Gem oprindelig form (alt undtagen de 3 tilstande)
+    original_shape = states.shape[:-1] 
+    
+    # Flad ud til (M, 3) så interpolatoren forstår det
+    states_flat = states.reshape(-1, 3)
+    
+    # Interpolér
+    Y_flat = Y_interp(states_flat)
+    pi_flat = pi_interp(states_flat)
+    
+    # Reshape tilbage til original form (f.eks. (T, N))
+    return Y_flat.reshape(original_shape), pi_flat.reshape(original_shape)
 
 ########
 # IRFs #

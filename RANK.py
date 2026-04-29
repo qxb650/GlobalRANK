@@ -9,6 +9,7 @@ import pickle
 
 from neural_nets import Policy, eval_nn
 import linear
+from linear import OccBin
 import aux_ as aux
 import jax
 
@@ -32,7 +33,7 @@ class RANK_model:
         # parameters of baseline model that could be estimated
         par["alpha"] = 0.33
         par["sigma"] = 1.0
-        par["beta"] = 0.97
+        par["beta"] = 0.985 #0.97
         par["epsilon"] = 9.0
         par["varphi"] = 5.0
         par["theta"] = 0.1
@@ -150,6 +151,8 @@ class RANK_model:
         linear = self.linear
         nn = self.nn
 
+        Y_DSS = par["Y_DSS"]
+
         rho_u = par["rho_u"]
         rho_z = par["rho_z"]
         rho_Gamma = par["rho_Gamma"]
@@ -170,9 +173,13 @@ class RANK_model:
         IRF_Y_u = (out_Y_u - Y_SSS)/Y_SSS
         IRF_pi_u = out_pi_u - pi_SSS
         if extra_nn:
-            out_Y_x_u, out_pi_x_u = eval_nn(par, train, linear, nn, u_shock_states, T_u)
+            out_Y_x_u, out_pi_x_u = eval_nn(par, train, linear, extra_nn, u_shock_states, T_u)
             IRF_Y_x_u = (out_Y_x_u - Y_SSS_x)/Y_SSS_x
             IRF_pi_x_u = out_pi_x_u - pi_SSS_x
+
+        out_OccBin, _ = OccBin(par, linear, u_shock_states)
+        IRF_Y_u_OccBin = out_OccBin[:,0]/Y_DSS
+        IRF_pi_u_OccBin = out_OccBin[:,1]
 
         # preference shock
         zeros = jnp.zeros((T_z, 1))
@@ -186,6 +193,10 @@ class RANK_model:
             IRF_Y_x_z = (out_Y_x_z - Y_SSS_x)/Y_SSS_x
             IRF_pi_x_z = out_pi_x_z - pi_SSS_x
 
+        out_OccBin, _ = OccBin(par, linear, z_shock_states)
+        IRF_Y_z_OccBin = out_OccBin[:,0]/Y_DSS
+        IRF_pi_z_OccBin = out_OccBin[:,1]
+
         # productivity shock
         zeros = jnp.zeros((T_Gamma, 1))
         ln_Gamma_shock = shocks[2] * rho_Gamma**jnp.arange(T_Gamma) #+ #par["mu_Gamma"]
@@ -195,9 +206,13 @@ class RANK_model:
         IRF_pi_ln_Gamma = out_pi_Gamma - pi_SSS
 
         if extra_nn:
-            out_Y_x_Gamma, out_pi_x_Gamma = eval_nn(par, train, linear, nn, ln_Gamma_shock_states, T_Gamma)
+            out_Y_x_Gamma, out_pi_x_Gamma = eval_nn(par, train, linear, extra_nn, ln_Gamma_shock_states, T_Gamma)
             IRF_Y_x_ln_Gamma = (out_Y_x_Gamma - Y_SSS_x)/Y_SSS_x
             IRF_pi_x_ln_Gamma = out_pi_x_Gamma - pi_SSS_x
+
+        out_OccBin, _ = OccBin(par, linear, ln_Gamma_shock_states)
+        IRF_Y_ln_Gamma_OccBin = out_OccBin[:,0]/Y_DSS
+        IRF_pi_ln_Gamma_OccBin = out_OccBin[:,1]
 
         IRF = SimpleNamespace()
 
@@ -225,6 +240,14 @@ class RANK_model:
             IRF.pi_extra_u = IRF_pi_x_u
             IRF.pi_extra_z = IRF_pi_x_z
             IRF.pi_extra_ln_Gamma = IRF_pi_x_ln_Gamma
+
+        IRF.Y_u_OccBin = IRF_Y_u_OccBin
+        IRF.Y_z_OccBin = IRF_Y_z_OccBin
+        IRF.Y_ln_Gamma_OccBin = IRF_Y_ln_Gamma_OccBin
+
+        IRF.pi_u_OccBin = IRF_pi_u_OccBin
+        IRF.pi_z_OccBin = IRF_pi_z_OccBin
+        IRF.pi_ln_Gamma_OccBin = IRF_pi_ln_Gamma_OccBin
 
         self.IRF = IRF
 
@@ -262,7 +285,10 @@ class RANK_model:
             states_i = aux.next_states(par, states_i, eps)
 
         Y_control, pi_control = eval_nn(par, train, linear, nn, states, T_max)
-        Y_OccBin_control, pi_OccBin_control = Y_interp_OccBin(states), pi_interp_OccBin(states)
+
+        out_OccBin, _ = OccBin(par, linear, states.reshape(-1,3))
+        out_OccBin = out_OccBin.reshape(T_max, N, 2)
+        Y_OccBin_control, pi_OccBin_control = jnp.clip(out_OccBin[...,0], -0.07, 1.00), jnp.clip(out_OccBin[...,1], -0.07, 1.00) #Y_interp_OccBin(states), pi_interp_OccBin(states)
 
         if extra_nn is not None:
             Y_x_control, pi_x_control = eval_nn(par, train, linear, extra_nn, states, T_max)
@@ -277,8 +303,11 @@ class RANK_model:
         GIRF_Y_u = jnp.mean((out_Y_u[:T_u] - Y_control[:T_u])/Y_control[:T_u], axis=1) # (N, T, 3)
         GIRF_pi_u = jnp.mean(out_pi_u[:T_u] - pi_control[:T_u], axis=1) # (N, T, 3)
 
-        GIRF_Y_u_OccBin = jnp.mean((Y_interp_OccBin(u_shock_states)[:T_u]-Y_OccBin_control[:T_u])/(Y_DSS+Y_OccBin_control[:T_u]), axis=1)
-        GIRF_pi_u_OccBin = jnp.mean((pi_interp_OccBin(u_shock_states)[:T_u]-pi_OccBin_control[:T_u]), axis=1)
+        out_OccBin, _ = OccBin(par, linear, u_shock_states.reshape(-1,3))
+        out_OccBin = out_OccBin.reshape(T_max, N, 2)
+
+        GIRF_Y_u_OccBin = jnp.mean((jnp.clip(out_OccBin[:T_u, :, 0], -0.07, 1.00)-Y_OccBin_control[:T_u])/(Y_DSS+Y_OccBin_control[:T_u]), axis=1)
+        GIRF_pi_u_OccBin = jnp.mean((jnp.clip(out_OccBin[:T_u, :, 1], -0.07, 1.00)-pi_OccBin_control[:T_u]), axis=1)
         
         if extra_nn:
             out_Y_x_u, out_pi_x_u = eval_nn(par, train, linear, nn, u_shock_states, T_max)
@@ -294,8 +323,11 @@ class RANK_model:
         GIRF_Y_z = jnp.mean((out_Y_z[:T_z] - Y_control[:T_z])/Y_control[:T_z], axis=1)
         GIRF_pi_z = jnp.mean(out_pi_z[:T_z] - pi_control[:T_z], axis=1)
 
-        GIRF_Y_z_OccBin = jnp.mean((Y_interp_OccBin(z_shock_states)[:T_z]-Y_OccBin_control[:T_z])/(Y_DSS+Y_OccBin_control[:T_z]), axis=1)
-        GIRF_pi_z_OccBin = jnp.mean((pi_interp_OccBin(z_shock_states)[:T_z]-pi_OccBin_control[:T_z]), axis=1)
+        out_OccBin, _ = OccBin(par, linear, z_shock_states.reshape(-1,3))
+        out_OccBin = out_OccBin.reshape(T_max, N, 2)
+
+        GIRF_Y_z_OccBin = jnp.mean((jnp.clip(out_OccBin[:T_z, :, 0], -0.07, 1.00)-Y_OccBin_control[:T_z])/(Y_DSS+Y_OccBin_control[:T_z]), axis=1)
+        GIRF_pi_z_OccBin = jnp.mean((jnp.clip(out_OccBin[:T_z, :, 1], -0.07, 1.00)-pi_OccBin_control[:T_z]), axis=1)
 
         if extra_nn:
             out_Y_x_z, out_pi_x_z = eval_nn(par, train, linear, extra_nn, z_shock_states, T_max)
@@ -308,16 +340,19 @@ class RANK_model:
         ln_Gamma_shock_states = jnp.concat([zeros, zeros, ln_Gamma_shock[:, None]], axis=-1)
         ln_Gamma_shock_states = states + ln_Gamma_shock_states[:, None, :]
         out_Y_Gamma, out_pi_Gamma = eval_nn(par, train, linear, nn, ln_Gamma_shock_states, T_max)
-        IRF_Y_ln_Gamma = jnp.mean((out_Y_Gamma[:T_Gamma] - Y_control[:T_Gamma])/Y_control[:T_Gamma], axis=1)
-        IRF_pi_ln_Gamma = jnp.mean(out_pi_Gamma[:T_Gamma] - pi_control[:T_Gamma], axis=1)
+        GIRF_Y_ln_Gamma = jnp.mean((out_Y_Gamma[:T_Gamma] - Y_control[:T_Gamma])/Y_control[:T_Gamma], axis=1)
+        GIRF_pi_ln_Gamma = jnp.mean(out_pi_Gamma[:T_Gamma] - pi_control[:T_Gamma], axis=1)
 
-        GIRF_Y_Gamma_OccBin = jnp.mean((Y_interp_OccBin(ln_Gamma_shock_states)[:T_Gamma]-Y_OccBin_control[:T_Gamma])/(Y_DSS+Y_OccBin_control[:T_Gamma]), axis=1)
-        GIRF_pi_Gamma_OccBin = jnp.mean((pi_interp_OccBin(ln_Gamma_shock_states)[:T_Gamma]-pi_OccBin_control[:T_Gamma]), axis=1)
+        out_OccBin, _ = OccBin(par, linear, ln_Gamma_shock_states.reshape(-1,3))
+        out_OccBin = out_OccBin.reshape(T_max, N, 2)
+
+        GIRF_Y_Gamma_OccBin = jnp.mean((jnp.clip(out_OccBin[:T_Gamma, :, 0], -0.07, 1.00)-Y_OccBin_control[:T_Gamma])/(Y_DSS+Y_OccBin_control[:T_Gamma]), axis=1)
+        GIRF_pi_Gamma_OccBin = jnp.mean((np.clip(out_OccBin[:T_Gamma, :, 0], -0.07, 1.00)-pi_OccBin_control[:T_Gamma]), axis=1)
 
         if extra_nn:
             out_Y_x_Gamma, out_pi_x_Gamma = eval_nn(par, train, linear, nn, ln_Gamma_shock_states, T_max)
-            IRF_Y_x_ln_Gamma = jnp.mean((out_Y_x_Gamma[:T_Gamma] - Y_x_control[:T_Gamma])/Y_x_control[:T_Gamma], axis=1)
-            IRF_pi_x_ln_Gamma = jnp.mean(out_pi_x_Gamma[:T_Gamma] - pi_x_control[:T_Gamma], axis=1)
+            GIRF_Y_x_ln_Gamma = jnp.mean((out_Y_x_Gamma[:T_Gamma] - Y_x_control[:T_Gamma])/Y_x_control[:T_Gamma], axis=1)
+            GIRF_pi_x_ln_Gamma = jnp.mean(out_pi_x_Gamma[:T_Gamma] - pi_x_control[:T_Gamma], axis=1)
 
         GIRF = SimpleNamespace()
 
@@ -331,11 +366,11 @@ class RANK_model:
 
         GIRF.Y_u = GIRF_Y_u
         GIRF.Y_z = GIRF_Y_z
-        GIRF.Y_ln_Gamma = IRF_Y_ln_Gamma
+        GIRF.Y_ln_Gamma = GIRF_Y_ln_Gamma
 
         GIRF.pi_u = GIRF_pi_u
         GIRF.pi_z = GIRF_pi_z
-        GIRF.pi_ln_Gamma = IRF_pi_ln_Gamma
+        GIRF.pi_ln_Gamma = GIRF_pi_ln_Gamma
 
         GIRF.Y_u_OccBin = GIRF_Y_u_OccBin
         GIRF.Y_z_OccBin = GIRF_Y_z_OccBin
@@ -348,11 +383,11 @@ class RANK_model:
         if extra_nn:
             GIRF.Y_extra_u = GIRF_Y_x_u
             GIRF.Y_extra_z = GIRF_Y_x_z
-            GIRF.Y_extra_ln_Gamma = IRF_Y_x_ln_Gamma
+            GIRF.Y_extra_ln_Gamma = GIRF_Y_x_ln_Gamma
 
             GIRF.pi_extra_u = GIRF_pi_x_u
             GIRF.pi_extra_z = GIRF_pi_x_z
-            GIRF.pi_extra_ln_Gamma = IRF_pi_x_ln_Gamma
+            GIRF.pi_extra_ln_Gamma = GIRF_pi_x_ln_Gamma
 
         self.GIRF = GIRF
 
@@ -384,63 +419,64 @@ class RANK_model:
 
         # nn: Y (2nd row)
         ax[1,0].plot(jnp.arange(T_u), IRF.Y_u, label='DEQN', color='red')
-        ax[1,1].plot(jnp.arange(T_z), IRF.Y_z, label='DEQN', color='red')
-        ax[1,2].plot(jnp.arange(T_Gamma), IRF.Y_ln_Gamma, label='DEQN', color='red')
+        ax[1,1].plot(jnp.arange(T_z), IRF.Y_z, color='red')
+        ax[1,2].plot(jnp.arange(T_Gamma), IRF.Y_ln_Gamma, color='red')
         for i in range(3): ax[1,i].set_title('Output')
 
         # nn: pi (3rd row)
-        ax[2,0].plot(jnp.arange(T_u), IRF.pi_u, label='DEQN', color='red')
-        ax[2,1].plot(jnp.arange(T_z), IRF.pi_z, label='DEQN', color='red')
-        ax[2,2].plot(jnp.arange(T_Gamma), IRF.pi_ln_Gamma, label='DEQN', color='red')
+        ax[2,0].plot(jnp.arange(T_u), IRF.pi_u, color='red')
+        ax[2,1].plot(jnp.arange(T_z), IRF.pi_z, color='red')
+        ax[2,2].plot(jnp.arange(T_Gamma), IRF.pi_ln_Gamma, color='red')
         for i in range(3): ax[2,i].set_title('Inflation')
 
         if plot_extra:
             
             # nn: Y (2nd row)
             ax[1,0].plot(jnp.arange(T_u), IRF.Y_extra_u, label='DEQN w/o ZLB', color='orange', ls='--')
-            ax[1,1].plot(jnp.arange(T_z), IRF.Y_extra_z, label='DEQN w/o ZLB', color='orange', ls='--')
-            ax[1,2].plot(jnp.arange(T_Gamma), IRF.Y_extra_ln_Gamma, label='DEQN w/o ZLB', color='orange', ls='--')
+            ax[1,1].plot(jnp.arange(T_z), IRF.Y_extra_z, color='orange', ls='--')
+            ax[1,2].plot(jnp.arange(T_Gamma), IRF.Y_extra_ln_Gamma, color='orange', ls='--')
             
             # nn: pi (3rd row)
-            ax[2,0].plot(jnp.arange(T_u), IRF.pi_extra_u, label='DEQN w/o ZLB', color='orange', ls='--')
-            ax[2,1].plot(jnp.arange(T_z), IRF.pi_extra_z, label='DEQN w/o ZLB', color='orange', ls='--')
-            ax[2,2].plot(jnp.arange(T_Gamma), IRF.pi_extra_ln_Gamma, label='DEQN w/o ZLB', color='orange', ls='--')
+            ax[2,0].plot(jnp.arange(T_u), IRF.pi_extra_u, color='orange', ls='--')
+            ax[2,1].plot(jnp.arange(T_z), IRF.pi_extra_z, color='orange', ls='--')
+            ax[2,2].plot(jnp.arange(T_Gamma), IRF.pi_extra_ln_Gamma, color='orange', ls='--')
             
 
         # linear: Y (2nd row)
         ax[1,0].plot(jnp.arange(T_u), (P[0,0] * IRF.u)/Y_DSS, label='Linear', color='green')
-        ax[1,1].plot(jnp.arange(T_z), (P[0,1] * IRF.z)/Y_DSS, label='Linear', color='green')
-        ax[1,2].plot(jnp.arange(T_Gamma), (P[0,2] * IRF.ln_Gamma)/Y_DSS, label='Linear', color='green')
+        ax[1,1].plot(jnp.arange(T_z), (P[0,1] * IRF.z)/Y_DSS, color='green')
+        ax[1,2].plot(jnp.arange(T_Gamma), (P[0,2] * IRF.ln_Gamma)/Y_DSS, color='green')
 
         # linear: pi (3rd row)
-        ax[2,0].plot(jnp.arange(T_u), P[1,0] * IRF.u, label='Linear', color='green')
-        ax[2,1].plot(jnp.arange(T_z), P[1,1] * IRF.z, label='Linear', color='green')
-        ax[2,2].plot(jnp.arange(T_Gamma), P[1,2] * IRF.ln_Gamma, label='Linear', color='green')
+        ax[2,0].plot(jnp.arange(T_u), P[1,0] * IRF.u, color='green')
+        ax[2,1].plot(jnp.arange(T_z), P[1,1] * IRF.z, color='green')
+        ax[2,2].plot(jnp.arange(T_Gamma), P[1,2] * IRF.ln_Gamma, color='green')
 
         # OccBin: Y (2nd row)
-        ax[1,0].plot(jnp.arange(T_u), Y_interp_OccBin(jnp.concatenate([IRF.u[:, None], jnp.zeros((T_u,2))], axis=-1))/Y_DSS, label='OccBin', ls ='--', color='purple')
-        ax[1,1].plot(jnp.arange(T_z), Y_interp_OccBin(jnp.concatenate([jnp.zeros((T_z,1)), IRF.z[:, None], jnp.zeros((T_z,1))], axis=-1))/Y_DSS, label='OccBin', ls='--', color='purple')
-        ax[1,2].plot(jnp.arange(T_Gamma), Y_interp_OccBin(jnp.concatenate([jnp.zeros((T_Gamma,2)), IRF.ln_Gamma[:, None]], axis=-1))/Y_DSS, label='OccBin', ls='--', color='purple')
+        ax[1,0].plot(jnp.arange(T_u), IRF.Y_u_OccBin, label='OccBin', ls ='--', color='purple')
+        ax[1,1].plot(jnp.arange(T_z), IRF.Y_z_OccBin, ls='--', color='purple')
+        ax[1,2].plot(jnp.arange(T_Gamma), IRF.Y_ln_Gamma_OccBin, ls='--', color='purple')
 
         # OccBin: pi (3rd row)
-        ax[2,0].plot(jnp.arange(T_u), pi_interp_OccBin(jnp.concatenate([IRF.u[:, None], jnp.zeros((T_u,2))], axis=-1)), label='OccBin', ls ='--', color='purple')
-        ax[2,1].plot(jnp.arange(T_z), pi_interp_OccBin(jnp.concatenate([jnp.zeros((T_z,1)), IRF.z[:, None], jnp.zeros((T_z,1))], axis=-1)), label='OccBin', ls ='--', color='purple')
-        ax[2,2].plot(jnp.arange(T_Gamma), pi_interp_OccBin(jnp.concatenate([jnp.zeros((T_Gamma,2)), IRF.ln_Gamma[:, None]], axis=-1)), label='OccBin', ls ='--', color='purple')
+        ax[2,0].plot(jnp.arange(T_u), IRF.pi_u_OccBin , ls ='--', color='purple')
+        ax[2,1].plot(jnp.arange(T_z), IRF.pi_z_OccBin , ls ='--', color='purple')
+        ax[2,2].plot(jnp.arange(T_Gamma), IRF.pi_ln_Gamma_OccBin , ls ='--', color='purple')
 
-        for i in range(3):
-            for j in range(3):
-                ax[i,j].legend()
+        f.tight_layout(rect=[0, 0.1, 1, 1])
 
-        f.tight_layout()
+        # 2. Placer nu legenden i det frie område
+        f.legend(loc='lower center', 
+                bbox_to_anchor=(0.5, 0.05), # 0.02 er lige over bunden i det tomme felt
+                ncol=5,          
+                frameon=False)
 
         if save_path is not None:
             f.savefig(save_path)
 
 
-    def plot_GIRF(self, save_path=None, plot_extra=False):
+    def plot_GIRF(self, save_path=None, plot_extra=False, plot_OccBin=True):
 
         par = self.par
-        train = self.train
         linear = self.linear
         IRF = self.GIRF
 
@@ -449,8 +485,6 @@ class RANK_model:
         T_Gamma = IRF.T_Gamma
         P = linear["P"]
         Y_DSS = par["Y_DSS"]
-
-        Y_interp_OccBin, pi_interp_OccBin = linear["Y_interp_OccBin"], linear["pi_interp_OccBin"]
         
         f, ax = plt.subplots(3, 3, figsize=(12, 12))
 
@@ -465,54 +499,57 @@ class RANK_model:
 
         # nn: Y (2nd row)
         ax[1,0].plot(jnp.arange(T_u), IRF.Y_u, label='DEQN', color='red')
-        ax[1,1].plot(jnp.arange(T_z), IRF.Y_z, label='DEQN', color='red')
-        ax[1,2].plot(jnp.arange(T_Gamma), IRF.Y_ln_Gamma, label='DEQN', color='red')
+        ax[1,1].plot(jnp.arange(T_z), IRF.Y_z, color='red')
+        ax[1,2].plot(jnp.arange(T_Gamma), IRF.Y_ln_Gamma, color='red')
         for i in range(3): ax[1,i].set_title('Output')
 
         # nn: pi (3rd row)
-        ax[2,0].plot(jnp.arange(T_u), IRF.pi_u, label='DEQN', color='red')
-        ax[2,1].plot(jnp.arange(T_z), IRF.pi_z, label='DEQN', color='red')
-        ax[2,2].plot(jnp.arange(T_Gamma), IRF.pi_ln_Gamma, label='DEQN', color='red')
+        ax[2,0].plot(jnp.arange(T_u), IRF.pi_u, color='red')
+        ax[2,1].plot(jnp.arange(T_z), IRF.pi_z, color='red')
+        ax[2,2].plot(jnp.arange(T_Gamma), IRF.pi_ln_Gamma, color='red')
         for i in range(3): ax[2,i].set_title('Inflation')
 
         if plot_extra:
             
             # nn: Y (2nd row)
             ax[1,0].plot(jnp.arange(T_u), IRF.Y_extra_u, label='DEQN w/o ZLB', color='orange', ls='--')
-            ax[1,1].plot(jnp.arange(T_z), IRF.Y_extra_z, label='DEQN w/o ZLB', color='orange', ls='--')
-            ax[1,2].plot(jnp.arange(T_Gamma), IRF.Y_extra_ln_Gamma, label='DEQN w/o ZLB', color='orange', ls='--')
+            ax[1,1].plot(jnp.arange(T_z), IRF.Y_extra_z, color='orange', ls='--')
+            ax[1,2].plot(jnp.arange(T_Gamma), IRF.Y_extra_ln_Gamma, color='orange', ls='--')
             
             # nn: pi (3rd row)
-            ax[2,0].plot(jnp.arange(T_u), IRF.pi_extra_u, label='DEQN w/o ZLB', color='orange', ls='--')
-            ax[2,1].plot(jnp.arange(T_z), IRF.pi_extra_z, label='DEQN w/o ZLB', color='orange', ls='--')
-            ax[2,2].plot(jnp.arange(T_Gamma), IRF.pi_extra_ln_Gamma, label='DEQN w/o ZLB', color='orange', ls='--')
+            ax[2,0].plot(jnp.arange(T_u), IRF.pi_extra_u, color='orange', ls='--')
+            ax[2,1].plot(jnp.arange(T_z), IRF.pi_extra_z, color='orange', ls='--')
+            ax[2,2].plot(jnp.arange(T_Gamma), IRF.pi_extra_ln_Gamma, color='orange', ls='--')
             
 
         # linear: Y (2nd row)
-        ax[1,0].plot(jnp.arange(T_u), (P[0,0] * IRF.u)/Y_DSS, label='Linear', color='green', ls='dotted')
-        ax[1,1].plot(jnp.arange(T_z), (P[0,1] * IRF.z)/Y_DSS, label='Linear', color='green', ls='dotted')
-        ax[1,2].plot(jnp.arange(T_Gamma), (P[0,2] * IRF.ln_Gamma)/Y_DSS, label='Linear', color='green', ls='dotted')
+        ax[1,0].plot(jnp.arange(T_u), (P[0,0] * IRF.u)/Y_DSS, label='linear', color='green', ls='dotted')
+        ax[1,1].plot(jnp.arange(T_z), (P[0,1] * IRF.z)/Y_DSS, color='green', ls='dotted')
+        ax[1,2].plot(jnp.arange(T_Gamma), (P[0,2] * IRF.ln_Gamma)/Y_DSS, color='green', ls='dotted')
 
         # linear: pi (3rd row)
-        ax[2,0].plot(jnp.arange(T_u), P[1,0] * IRF.u, label='Linear', color='green', ls='dotted')
-        ax[2,1].plot(jnp.arange(T_z), P[1,1] * IRF.z, label='Linear', color='green', ls='dotted')
-        ax[2,2].plot(jnp.arange(T_Gamma), P[1,2] * IRF.ln_Gamma, label='Linear', color='green', ls='dotted')
+        ax[2,0].plot(jnp.arange(T_u), P[1,0] * IRF.u, color='green', ls='dotted')
+        ax[2,1].plot(jnp.arange(T_z), P[1,1] * IRF.z, color='green', ls='dotted')
+        ax[2,2].plot(jnp.arange(T_Gamma), P[1,2] * IRF.ln_Gamma, color='green', ls='dotted')
 
-        # OccBin: Y (2nd row)
-        ax[1,0].plot(jnp.arange(T_u), IRF.Y_u_OccBin, label='OccBin', ls ='--', color='purple')
-        ax[1,1].plot(jnp.arange(T_z), IRF.Y_z_OccBin, label='OccBin', ls='--', color='purple')
-        ax[1,2].plot(jnp.arange(T_Gamma), IRF.Y_Gamma_OccBin, label='OccBin', ls='--', color='purple')
+        if plot_OccBin:
+            # OccBin: Y (2nd row)
+            ax[1,0].plot(jnp.arange(T_u), IRF.Y_u_OccBin, label='OccBin', ls ='--', color='purple')
+            ax[1,1].plot(jnp.arange(T_z), IRF.Y_z_OccBin, ls='--', color='purple')
+            ax[1,2].plot(jnp.arange(T_Gamma), IRF.Y_Gamma_OccBin, ls='--', color='purple')
 
-        # OccBin: pi (3rd row)
-        ax[2,0].plot(jnp.arange(T_u), IRF.pi_u_OccBin, label='OccBin', ls ='--', color='purple')
-        ax[2,1].plot(jnp.arange(T_z), IRF.pi_z_OccBin, label='OccBin', ls ='--', color='purple')
-        ax[2,2].plot(jnp.arange(T_Gamma), IRF.pi_Gamma_OccBin, label='OccBin', ls ='--', color='purple')
+            # OccBin: pi (3rd row)
+            ax[2,0].plot(jnp.arange(T_u), IRF.pi_u_OccBin, ls ='--', color='purple')
+            ax[2,1].plot(jnp.arange(T_z), IRF.pi_z_OccBin, ls ='--', color='purple')
+            ax[2,2].plot(jnp.arange(T_Gamma), IRF.pi_Gamma_OccBin, ls ='--', color='purple')
 
-        for i in range(3):
-            for j in range(3):
-                ax[i,j].legend()
+        f.tight_layout(rect=[0, 0.1, 1, 1])
 
-        f.tight_layout()
+        # 2. Placer nu legenden i det frie område
+        f.legend(loc='lower center', 
+                bbox_to_anchor=(0.5, 0.05), # 0.02 er lige over bunden i det tomme felt
+                ncol=5,          
+                frameon=False)
 
         if save_path is not None:
             f.savefig(save_path)

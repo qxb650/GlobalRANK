@@ -10,6 +10,7 @@ import math
 from aux_ import draw_shocks, draw_states_directly, next_states_quad, next_states
 from model_funcs import euler_error, NKPC_error, taylor_rule
 from neural_nets import eval_nn
+from linear import OccBin
 
 ############
 # TRAINING #
@@ -210,9 +211,10 @@ def simulate(model, T, shocks, extra_nn=None):
     # linear
     out_lin = states @ linear["P"].T
     Y_lin, pi_lin = out_lin[:, 0], out_lin[:, 1]
-    Y_interp_OccBin, pi_interp_OccBin = linear["Y_interp_OccBin"], linear["pi_interp_OccBin"]
-    Y_OccBin = Y_interp_OccBin(states)
-    pi_OccBin = pi_interp_OccBin(states)
+    out_OccBin, _ = OccBin(par, linear, states)
+    
+    Y_OccBin = jnp.clip(out_OccBin[:,0], -0.07, 1.00)
+    pi_OccBin = jnp.clip(out_OccBin[:,1], -0.07, 1.00)
 
     sim = SimpleNamespace()
 
