@@ -457,9 +457,9 @@ def plot_boundaries(model, sigma_dict, N_grid=50, N_mc=10000, std_low=-3, std_hi
     # extra
     for i in range(3): ax[i].scatter(0.00, 0.00, color='blue') # , label='DSS & SSS'
 
-    ax[0].text(0.005, -0.005, 'DSS', fontweight='bold', color='blue', fontsize=12)
-    ax[1].text(0.0005, -0.005, 'DSS', fontweight='bold', color='blue', fontsize=12)
-    ax[2].text(0.0005, -0.008, 'DSS', fontweight='bold', color='blue', fontsize=12)
+    ax[0].text(0.005, -0.005, 'SSS', fontweight='bold', color='blue', fontsize=12)
+    ax[1].text(0.0005, -0.005, 'SSS', fontweight='bold', color='blue', fontsize=12)
+    ax[2].text(0.0005, -0.008, 'SSS', fontweight='bold', color='blue', fontsize=12)
 
     def set_std_ticks(ax, std_val, symbol, sigma_label, axis='x', decimals=3):
         ticks = [-2*std_val, -std_val, 0, std_val, 2*std_val]
@@ -473,11 +473,11 @@ def plot_boundaries(model, sigma_dict, N_grid=50, N_mc=10000, std_low=-3, std_hi
         if axis == 'x':
             ax.set_xticks(ticks)
             ax.set_xticklabels(labels)
-            ax.set_xlabel(rf'${symbol}$ $(\sigma_{{{sigma_label}}}={std_val:.3f})$')
+            ax.set_xlabel(rf'${symbol}$ $(\sigma_{{{sigma_label}}}={std_val:.4f})$')
         else:
             ax.set_yticks(ticks)
             ax.set_yticklabels(labels)
-            ax.set_ylabel(rf'${symbol}$ $(\sigma_{{{sigma_label}}}={std_val:.3f})$')
+            ax.set_ylabel(rf'${symbol}$ $(\sigma_{{{sigma_label}}}={std_val:.4f})$')
 
     std_u_val        = float(std_u)
     std_z_val        = float(std_z)
@@ -540,3 +540,93 @@ def plot_boundaries(model, sigma_dict, N_grid=50, N_mc=10000, std_low=-3, std_hi
 
     if save_path is not None:
             f.savefig(save_path, bbox_inches='tight')
+
+def plot_GIRF(model, save_path=None):
+
+    IRF = model.IRF
+    GIRF = model.GIRF
+
+    plt.rcParams.update({'font.size': 12})
+
+    f, ax = plt.subplots(5, 3, figsize=(10, 15))
+
+    T = GIRF.T
+
+    ax[0,0].plot(jnp.arange(T), IRF.u)
+    ax[0,1].plot(jnp.arange(T), IRF.z)
+    ax[0,2].plot(jnp.arange(T), IRF.ln_Gamma)
+
+    ax[0,0].set_title(r'Monetary Policy Shock: $u_t$')
+    ax[0,1].set_title(r'Preference Shifter: $z_t$')
+    ax[0,2].set_title(r'Productivity: $\ln(\Gamma_t)$')
+
+    # output
+    ax[1,0].plot(jnp.arange(T), 100*GIRF.Y_u, color='C0', label='DEQN (GIRF)')
+    ax[1,0].plot(jnp.arange(T), 100*GIRF.Y_u_OccBin, color='C1', marker='D', ms=2.5, ls='--', label='OccBin (GIRF)')
+    ax[1,0].plot(jnp.arange(T), 100*IRF.Y_u_lin, color='C2', label='Log-Linear (IRF)')
+
+    ax[1,1].plot(jnp.arange(T), 100*GIRF.Y_z, color='C0')
+    ax[1,1].plot(jnp.arange(T), 100*GIRF.Y_z_OccBin, color='C1', marker='D', ms=2.5, ls='--')
+    ax[1,1].plot(jnp.arange(T), 100*IRF.Y_z_lin, color='C2')
+
+    ax[1,2].plot(jnp.arange(T), 100*GIRF.Y_ln_Gamma, color='C0')
+    ax[1,2].plot(jnp.arange(T), 100*GIRF.Y_ln_Gamma_OccBin, color='C1', marker='D', ms=2.5, ls='--')
+    ax[1,2].plot(jnp.arange(T), 100*IRF.Y_ln_Gamma_lin, color='C2')
+
+    # inflation
+    ax[2,0].plot(jnp.arange(T), 100*GIRF.pi_u, color='C0')
+    ax[2,0].plot(jnp.arange(T), 100*GIRF.pi_u_OccBin, color='C1', marker='D', ms=2.5, ls='--')
+    ax[2,0].plot(jnp.arange(T), 100*IRF.pi_u_lin, color='C2')
+
+    ax[2,1].plot(jnp.arange(T), 100*GIRF.pi_z, color='C0')
+    ax[2,1].plot(jnp.arange(T), 100*GIRF.pi_z_OccBin, color='C1', marker='D', ms=2.5, ls='--')
+    ax[2,1].plot(jnp.arange(T), 100*IRF.pi_z_lin, color='C2')
+
+    ax[2,2].plot(jnp.arange(T), 100*GIRF.pi_ln_Gamma, color='C0')
+    ax[2,2].plot(jnp.arange(T), 100*GIRF.pi_ln_Gamma_OccBin, color='C1', marker='D', ms=2.5, ls='--')
+    ax[2,2].plot(jnp.arange(T), 100*IRF.pi_ln_Gamma_lin, color='C2')
+
+    # nominal interest rate
+    ax[3,0].plot(jnp.arange(T), 100*GIRF.i_u, color='C0')
+    ax[3,0].plot(jnp.arange(T), 100*GIRF.i_u_OccBin, color='C1', marker='D', ms=2.5, ls='--')
+    ax[3,0].plot(jnp.arange(T), 100*IRF.i_u_lin, color='C2')
+
+    ax[3,1].plot(jnp.arange(T), 100*GIRF.i_z, color='C0')
+    ax[3,1].plot(jnp.arange(T), 100*GIRF.i_z_OccBin, color='C1', marker='D', ms=2.5, ls='--')
+    ax[3,1].plot(jnp.arange(T), 100*IRF.i_z_lin, color='C2')
+
+    ax[3,2].plot(jnp.arange(T), 100*GIRF.i_ln_Gamma, color='C0')
+    ax[3,2].plot(jnp.arange(T), 100*GIRF.i_ln_Gamma_OccBin, color='C1', marker='D', ms=2.5, ls='--')
+    ax[3,2].plot(jnp.arange(T), 100*IRF.i_ln_Gamma_lin, color='C2')
+
+    # ZLB frequency
+    ax[4,0].plot(jnp.arange(T), 100*GIRF.i_u_ZLB, color='C0')
+    ax[4,0].plot(jnp.arange(T), 100*GIRF.i_u_ZLB_OccBin, color='C1', marker='D', ms=2.5, ls='--')
+
+    ax[4,1].plot(jnp.arange(T), 100*GIRF.i_z_ZLB, color='C0')
+    ax[4,1].plot(jnp.arange(T), 100*GIRF.i_z_ZLB_OccBin, color='C1', marker='D', ms=2.5, ls='--')
+
+    ax[4,2].plot(jnp.arange(T), 100*GIRF.i_ln_Gamma_ZLB, color='C0')
+    ax[4,2].plot(jnp.arange(T), 100*GIRF.i_ln_Gamma_ZLB_OccBin, color='C1', marker='D', ms=2.5, ls='--')
+
+    # pretify
+    ax[0,0].set_ylabel('Abs. deviation')
+    for i_ in [1,4]: ax[i_,0].set_ylabel('pct.')
+    for i_ in [2,3]: ax[i_,0].set_ylabel('p.p.')
+    for i_ in range(3): ax[1, i_].set_title(r'Output: $Y_t$')
+    for i_ in range(3): ax[2, i_].set_title(r'Inflation: $\pi_t$')
+    for i_ in range(3): ax[3, i_].set_title(r'Nominal Interest Rate: $i_t$')
+    for i_ in range(3): ax[4, i_].set_title(r'ZLB frequency')
+
+    for a in ax.flat:
+        a.set_xticks([0, 2, 4, 8, 12])
+        a.set_xticklabels(['Impact', 'Q2', 'Q4', 'Q8', 'Q12'], rotation=45, ha='right', rotation_mode='anchor')
+        a.grid(True, alpha=0.3)
+
+    f.legend(loc='lower center', bbox_to_anchor=(0.5, -0.02), ncol=3)
+    
+
+    f.tight_layout()
+
+    if save_path is not None:
+        f.savefig(save_path, bbox_inches='tight')

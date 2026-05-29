@@ -59,14 +59,22 @@ def compute_Y_star(par, ln_Gamma):
 
     return Y_star
 
-def taylor_rule(par, Y, pi, u, z, ln_Gamma, eps_z, eps_Gamma, ZLB, weights, return_shadow=False, return_linear=False):
+def taylor_rule_lin(par, Y, pi, u, ln_Gamma):
     
     beta = par["beta"]
     phi_pi = par["phi_pi"]
     phi_y = par["phi_y"]
 
-    if return_linear: # in this case variables are in (log-)-DSS-deviations and not levels
-        return phi_pi*pi + phi_y*Y-phi_y*(1+par["varphi"])/(par["varphi"]+par["sigma"]+par["alpha"]-par["alpha"]*par["sigma"])*ln_Gamma+u
+    # in this case variables are in (log-)-DSS-deviations and not levels
+    i_hat_shadow = phi_pi*pi + phi_y*Y-phi_y*(1+par["varphi"])/(par["varphi"]+par["sigma"]+par["alpha"]-par["alpha"]*par["sigma"])*ln_Gamma+u
+
+    return i_hat_shadow
+
+def taylor_rule(par, Y, pi, u, z, ln_Gamma, eps_z, eps_Gamma, ZLB, weights, return_shadow=False):
+    
+    beta = par["beta"]
+    phi_pi = par["phi_pi"]
+    phi_y = par["phi_y"]
 
     # compute natural output and natural (gross) nominal interest rates
     i_star = (1/beta)

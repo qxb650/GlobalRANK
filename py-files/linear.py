@@ -14,7 +14,7 @@ from neural_nets import eval_nn
 from aux_ import next_states_quad
 import scipy.io as sio
 
-from model_funcs import euler_error, NKPC_error, taylor_rule
+from model_funcs import euler_error, NKPC_error, taylor_rule_lin, taylor_rule
 
 ##################################
 # GENERAL LINERIZATION FUNCTIONS #
@@ -100,6 +100,7 @@ def compute_linear_policy(par, ZLB_regime=False):
 def setup_linear(model, T_OccBin):
 
     par = model.par
+    train = model.train
 
     linear = dict()
 
@@ -128,6 +129,8 @@ def setup_linear(model, T_OccBin):
 
     linear["P_ZLB_hist"] = P_ZLB_hist
     linear["d_ZLB_hist"] = d_ZLB_hist
+
+    linear["T_OccBin"] = train["T_OccBin"]
 
     model.linear = linear
 
@@ -159,13 +162,13 @@ def compute_P_star(P, A_ZLB, B_ZLB, C_ZLB, D_ZLB, K_ZLB, T):
 def compute_policy_and_ZLB(par, states, P, d):
 
     X = states @ P.T + d.T # (N, 3) x (3, 2) -> (N, 2)
-    pi = X[:, 1] #+ par["pi_DSS"]  # (N,)
-    Y = X[:, 0] #compute_Y(par, X[:, 0]) # REMEBER TAYLOR RULE IS MADE FOR LEVEL VARIABLES
+    pi = X[:, 1]
+    Y = X[:, 0]
     u = states[:, 0] # (N,)
     z = states[:, 1]
     ln_Gamma = states[:, 2]
-    i_dev_shadow = taylor_rule(par, Y, pi, u, z, ln_Gamma, jnp.zeros(1), jnp.zeros(1), -100, jnp.ones(1), return_linear=True) # (N,)
-    ZLB_binds = par["i_DSS"] + i_dev_shadow <= par["ZLB"] + 1e-5
+    i_dev_shadow = taylor_rule_lin(par, Y, pi, u, ln_Gamma)
+    ZLB_binds = par["i_DSS"] + i_dev_shadow <= par["ZLB"]  + 1e-5
 
     return X, ZLB_binds
 
@@ -268,11 +271,7 @@ def compute_Y(par, Y_dev):
 
     Y_DSS = par["Y_DSS"]
     
-    if par["do_log_lin"]:
-        Y = Y_DSS*jnp.exp(Y_dev)
-
-    else:
-        Y = Y_DSS + Y_dev
+    Y = Y_DSS*jnp.exp(Y_dev)
 
     return Y
 
@@ -280,11 +279,7 @@ def compute_Y_per(par, Y_dev):
     
     Y_DSS = par["Y_DSS"]
     
-    if par["do_log_lin"]:
-        Y_per = jnp.exp(Y_dev)-1
-
-    else:
-        Y_per = (Y_dev-Y_DSS)/Y_DSS
+    Y_per = jnp.exp(Y_dev)-1
 
     return Y_per
 
@@ -305,7 +300,7 @@ def eval_lin(model, states, return_dev, return_i=False):
         pi_dev = pi_raw
 
         if return_i:
-            i_dev = taylor_rule(par, Y_raw, pi_raw, states[..., 0], states[..., 1], states[..., 2], 0.00, 0.00, -100, 0.00, return_linear=True)
+            i_dev = taylor_rule_lin(par, Y_raw, pi_raw, states[..., 0], states[..., 2])
 
             return Y_dev, pi_dev, i_dev
             
@@ -317,7 +312,7 @@ def eval_lin(model, states, return_dev, return_i=False):
         pi = pi_raw
         
         if return_i:
-            i_dev = taylor_rule(par, Y_raw, pi_raw, states[..., 0], states[..., 1], states[..., 2], 0.00, 0.00, -100, 0.00, return_linear=True)
+            i_dev = taylor_rule_lin(par, Y_raw, pi_raw, states[..., 0], states[..., 2])
             i = par["i_DSS"] + i_dev
             return Y, pi, i
         else:
@@ -337,7 +332,7 @@ def eval_lin_womodel(par, linear, states, return_dev, return_i=False):
         pi_dev = pi_raw
 
         if return_i:
-            i_dev = taylor_rule(par, Y_raw, pi_raw, states[..., 0], states[..., 1], states[..., 2], 0.00, 0.00, -100, 0.00, return_linear=True)
+            i_dev = taylor_rule_lin(par, Y_raw, pi_raw, states[..., 0], states[..., 2])
 
             return Y_dev, pi_dev, i_dev
             
@@ -349,32 +344,32 @@ def eval_lin_womodel(par, linear, states, return_dev, return_i=False):
         pi = pi_raw
         
         if return_i:
-            i_dev = taylor_rule(par, Y_raw, pi_raw, states[..., 0], states[..., 1], states[..., 2], 0.00, 0.00, -100, 0.00, return_linear=True)
+            i_dev = taylor_rule_lin(par, Y_raw, pi_raw, states[..., 0], states[..., 2])
             i = par["i_DSS"] + i_dev
             return Y, pi, i
         else:
             return Y, pi
 
-def eval_lin_nn(par, linear, states, return_dev):
+# def eval_lin_nn(par, linear, states, return_dev):
 
-    P = linear["P"].T # (3, 2)
+#     P = linear["P"].T # (3, 2)
 
-    out_lin = states @ P
+#     out_lin = states @ P
 
-    Y_raw = out_lin[..., 0]
-    pi_raw = out_lin[..., 1]
+#     Y_raw = out_lin[..., 0]
+#     pi_raw = out_lin[..., 1]
 
-    if return_dev:
-        Y_dev = compute_Y_per(par, Y_raw)
-        pi_dev = pi_raw
+#     if return_dev:
+#         Y_dev = compute_Y_per(par, Y_raw)
+#         pi_dev = pi_raw
 
-        return Y_dev, pi_dev
+#         return Y_dev, pi_dev
 
-    else:
-        Y = compute_Y(par, Y_raw)
-        pi = pi_raw
+#     else:
+#         Y = compute_Y(par, Y_raw)
+#         pi = pi_raw
 
-        return Y, pi
+#         return Y, pi
 
 
 def eval_OccBin(model, states, return_dev=False, return_i=False):
@@ -398,7 +393,8 @@ def eval_OccBin(model, states, return_dev=False, return_i=False):
         pi_dev = pi_raw
 
         if return_i:
-            i_dev = taylor_rule(par, Y_raw, pi_raw, states[..., 0], states[..., 1], states[..., 2], 0.00, 0.00, par["ZLB"], 0.00, return_linear=True)
+            i_dev = taylor_rule_lin(par, Y_raw, pi_raw, states[..., 0], states[..., 2])
+            i_dev = jnp.maximum(i_dev, par["ZLB"] - par["i_DSS"])
 
             return Y_dev, pi_dev, i_dev
         else:
@@ -410,7 +406,8 @@ def eval_OccBin(model, states, return_dev=False, return_i=False):
 
         if return_i:
         
-            i_dev = taylor_rule(par, Y, pi, states[..., 0], states[..., 1], states[..., 2], 0.00, 0.00, par["ZLB"], 0.00, return_linear=True)
+            i_dev = taylor_rule_lin(par, Y_raw, pi_raw, states[..., 0], states[..., 2])
+            i_dev = jnp.maximum(i_dev, par["ZLB"] - par["i_DSS"])
             i = par["i_DSS"] + i_dev
 
             return Y, pi, i
@@ -434,11 +431,10 @@ def eval_OccBin_womodel(par, linear, states, return_dev=False, return_i=False):
     if return_dev:
         Y_dev = compute_Y_per(par, Y_raw)
         pi_dev = pi_raw
+
         if return_i:
-            Y = compute_Y(par, Y_raw)
-            pi = pi_raw
-            i = taylor_rule(par, Y, pi, states[..., 0], states[..., 1], states[..., 2], 0.00, 0.00, par["ZLB"], 0.00)
-            i_dev = i - par["i_DSS"]
+            i_dev = taylor_rule_lin(par, Y_raw, pi_raw, states[..., 0], states[..., 2])
+            i_dev = jnp.maximum(i_dev, par["ZLB"] - par["i_DSS"])
 
             return Y_dev, pi_dev, i_dev
         else:
@@ -449,8 +445,13 @@ def eval_OccBin_womodel(par, linear, states, return_dev=False, return_i=False):
         pi = pi_raw
 
         if return_i:
-            i = taylor_rule(par, Y, pi, states[..., 0], states[..., 1], states[..., 2], 0.00, 0.00, par["ZLB"], 0.00)
+        
+            i_dev = taylor_rule_lin(par, Y_raw, pi_raw, states[..., 0], states[..., 2])
+            i_dev = jnp.maximum(i_dev, par["ZLB"] - par["i_DSS"])
+            i = par["i_DSS"] + i_dev
+
             return Y, pi, i
+
         else:
             return Y, pi
 
@@ -722,7 +723,7 @@ def simulate_linear(model, sigmas, T, N=1, known_states=None, key_=42, plot=Fals
 
 
 
-def compute_errors(model, sigma_dict, N=50_000, compare_nn=False):
+def compute_errors(model, sigma_dict, N=50_000, compare_nn=False, key_number=42):
 
     from solve import construct_gh_nodes
 
@@ -734,10 +735,10 @@ def compute_errors(model, sigma_dict, N=50_000, compare_nn=False):
 
     ZLB = par["ZLB"]
     gh_n_per_shock = train["gh_n_per_shock"]
-    gh_x, gh_w = construct_gh_nodes(dtype, gh_n_per_shock, sigma_dict, zero_var=0)
+    gh_x, gh_w = construct_gh_nodes(dtype, gh_n_per_shock, sigma_dict)
 
     # draw states
-    key = jax.random.PRNGKey(42)
+    key = jax.random.PRNGKey(key_number)
     _, test_key = jax.random.split(key)
     states = draw_states_directly(test_key, par, dtype, N, sigma_dict["sigma_eps_u"], sigma_dict["sigma_eps_z"], sigma_dict["sigma_eps_Gamma"])
 

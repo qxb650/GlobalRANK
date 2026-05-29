@@ -188,7 +188,7 @@ def train_nn(
 
 def simulate(
     model, N, T, sigma_dict, ZLB=-1, key_number=42, init_SSS=True,
-    do_lin=True, do_OccBin=True, extra_nn=None, extra_nn_ZLB=None
+    do_lin=True, do_OccBin=True, extra_nn=None, extra_nn_ZLB=None, load_key=None
 ):
 
     par = FrozenDict(model.par)
@@ -276,6 +276,174 @@ def simulate(
         sim.i_extra = taylor_rule(par, Y_extra, pi_extra, u, z, ln_Gamma, 0.0, 0.0, extra_nn_ZLB, 0.0)
 
     model.sim = sim
+
+########
+# GIRF #
+########
+
+def compute_ergodic_dist(model, sigma_dict, N, key_number=42, do_print=False):
+
+    par = model.par
+    train = model.train
+    linear = model.linear
+    dtype = model.dtype
+    nn = model.nn
+
+    key = jax.random.key(key_number)
+
+    # draw states from ergodic distribution
+    states = draw_states_directly(key, par, dtype, N, sigma_dict["sigma_eps_u"], sigma_dict["sigma_eps_z"], sigma_dict["sigma_eps_Gamma"])
+
+    # compute SSS
+    Y_SSS, pi_SSS = eval_nn(par, train, linear, nn, jnp.zeros((1,3)), 1)
+    i_SSS = taylor_rule(par, Y_SSS, pi_SSS, 0.00, 0.00, 0.00, 0.00, 0.00, par["ZLB"], 0.00)
+
+    # compute policies and ergodic mean
+    Y, pi = eval_nn(par, train, linear, nn, states, N)
+    i = taylor_rule(par, Y, pi, states[..., 0], states[..., 1], states[..., 2], 0.00, 0.00, par["ZLB"], 0.00)
+
+    Y_ergodic_mean = jnp.mean(Y)
+    pi_ergodic_mean = jnp.mean(pi)
+    i_ergodic_mean = jnp.mean(i)
+
+    # compute OccBin policies and ergodic mean
+    Y_OccBin, pi_OccBin, i_OccBin = eval_OccBin(model, states, return_i=True)
+
+    Y_OccBin_ergodic_mean = jnp.mean(Y_OccBin)
+    pi_OccBin_ergodic_mean = jnp.mean(pi_OccBin)
+    i_OccBin_ergodic_mean = jnp.mean(i_OccBin)
+
+    # save all in par
+    par["Y_ergodic_mean"] = Y_ergodic_mean
+    par["pi_ergodic_mean"] = pi_ergodic_mean
+    par["i_ergodic_mean"] = i_ergodic_mean
+
+    par["Y_SSS"] = Y_SSS
+    par["pi_SSS"] = pi_SSS
+    par["i_SSS"] = i_SSS
+
+    par["Y_OccBin_ergodic_mean"] = Y_OccBin_ergodic_mean
+    par["pi_OccBin_ergodic_mean"] = pi_OccBin_ergodic_mean
+    par["i_OccBin_ergodic_mean"] = i_OccBin_ergodic_mean
+
+    if do_print:
+        print(f"{'':20} {'NN':>12} {'OccBin':>12}")
+        print("-" * 44)
+        print(f"{'Y (ergodic mean)':20} {par['Y_ergodic_mean'].item():>12.4f} {par['Y_OccBin_ergodic_mean'].item():>12.4f}")
+        print(f"{'pi (ergodic mean)':20} {100*par['pi_ergodic_mean'].item():>12.4f} {100*par['pi_OccBin_ergodic_mean'].item():>12.4f}")
+        print(f"{'i (ergodic mean)':20} {100*par['i_ergodic_mean'].item():>12.4f} {100*par['i_OccBin_ergodic_mean'].item():>12.4f}")
+        print(f"{'ZLB freq. (ergodic mean)':20} {100*jnp.mean(i <= par["ZLB"]).item():>12.4f} {100*jnp.mean(i_OccBin <= par["ZLB"]).item():>12.4f}")
+        print("-" * 44)
+        print(f"{'Y (SSS/DSS)':20} {par['Y_SSS'].item():>12.4f} {par['Y_DSS']:>12.4f}")
+        print(f"{'pi (SSS/DSS)':20} {100*par['pi_SSS'].item():>12.4f} {100*par['pi_DSS']:>12.4f}")
+        print(f"{'i (SSS/DSS)':20} {100*par['i_SSS'].item():>12.4f} {100*par['i_DSS']:>12.4f}")
+
+
+def compute_GIRF(model, sigma_dict, N, key_number=42, T=10, u_neg=False, z_neg=False, ln_Gamma_neg=False):
+
+    par = model.par
+    train = model.train
+    linear = model.linear
+    nn = model.nn
+
+    # simulate control group
+    simulate(model, N, T, sigma_dict, ZLB=par["ZLB"], key_number=key_number, init_SSS=False,
+    do_lin=True, do_OccBin=True)
+
+    # compute ergodic menas
+    compute_ergodic_dist(model, sigma_dict, N, key_number=key_number)
+
+    # unpack shock values
+    u_shock = -sigma_dict["sigma_eps_u"] if u_neg else sigma_dict["sigma_eps_u"]
+    z_shock = -sigma_dict["sigma_eps_z"] if z_neg else sigma_dict["sigma_eps_z"]
+    ln_Gamma_shock = -sigma_dict["sigma_eps_Gamma"] if ln_Gamma_neg else sigma_dict["sigma_eps_Gamma"]
+
+    # compute shock series
+    u_shock_series = u_shock*par["rho_u"]**jnp.arange(T)
+    z_shock_series = z_shock*par["rho_z"]**jnp.arange(T)
+    ln_Gamma_shock_series = ln_Gamma_shock*par["rho_Gamma"]**jnp.arange(T)
+
+    u_shock_series_repeated = u_shock_series[:, None].repeat(N, axis=1)
+    z_shock_series_repeated = z_shock_series[:, None].repeat(N, axis=1)
+    ln_Gamma_shock_series_repeated = ln_Gamma_shock_series[:, None].repeat(N, axis=1)
+
+    # states 
+    sim = model.sim
+    states_u_ = sim.states.at[:, :, 0].add(u_shock_series_repeated)
+    states_z_ = sim.states.at[:, :, 1].add(z_shock_series_repeated)
+    states_ln_Gamma_ = sim.states.at[:, :, 2].add(ln_Gamma_shock_series_repeated)
+
+    # u
+    states_u = states_u_.reshape(-1, 3)
+    Y_u, pi_u = eval_nn(par, train, linear, nn, states_u, T*N)
+    i_u = taylor_rule(par, Y_u, pi_u, states_u[..., 0], states_u[..., 1], states_u[..., 2], 0.00, 0.00, par["ZLB"], 0.00)
+    Y_u, pi_u, i_u = Y_u.reshape(T, N), pi_u.reshape(T, N), i_u.reshape(T, N)
+
+    i_u_ZLB = jnp.mean(i_u <= par["ZLB"], axis=1)
+    Y_u = (jnp.mean(Y_u, axis=1) - par["Y_ergodic_mean"])/par["Y_ergodic_mean"]
+    pi_u = jnp.mean(pi_u, axis=1) - par["pi_ergodic_mean"]
+    i_u = jnp.mean(i_u, axis=1) - par["i_ergodic_mean"]
+    
+    Y_u_OccBin, pi_u_OccBin, i_u_OccBin = eval_OccBin(model, states_u_, return_dev=False, return_i=True)
+    i_u_ZLB_OccBin = jnp.mean(i_u_OccBin <= par["ZLB"], axis=1)
+    Y_u_OccBin = (jnp.mean(Y_u_OccBin, axis=1) - par["Y_OccBin_ergodic_mean"])/par["Y_OccBin_ergodic_mean"]
+    pi_u_OccBin = jnp.mean(pi_u_OccBin, axis=1) - par["pi_OccBin_ergodic_mean"]
+    i_u_OccBin = jnp.mean(i_u_OccBin, axis=1) - par["i_OccBin_ergodic_mean"]
+
+    # z
+    states_z = states_z_.reshape(-1, 3)
+    Y_z, pi_z = eval_nn(par, train, linear, nn, states_z, T*N)
+    i_z = taylor_rule(par, Y_z, pi_z, states_z[..., 0], states_z[..., 1], states_z[..., 2], 0.00, 0.00, par["ZLB"], 0.00)
+    
+    Y_z, pi_z, i_z = Y_z.reshape(T, N), pi_z.reshape(T, N), i_z.reshape(T, N)
+    i_z_ZLB = jnp.mean(i_z <= par["ZLB"], axis=1)
+    Y_z = (jnp.mean(Y_z, axis=1) - par["Y_ergodic_mean"])/par["Y_ergodic_mean"]
+    pi_z = jnp.mean(pi_z, axis=1) - par["pi_ergodic_mean"]
+    i_z = jnp.mean(i_z, axis=1) - par["i_ergodic_mean"]
+    
+    Y_z_OccBin, pi_z_OccBin, i_z_OccBin = eval_OccBin(model, states_z_, return_dev=False, return_i=True)
+    i_z_ZLB_OccBin = jnp.mean(i_z_OccBin <= par["ZLB"], axis=1)
+    Y_z_OccBin = (jnp.mean(Y_z_OccBin, axis=1) - par["Y_OccBin_ergodic_mean"])/par["Y_OccBin_ergodic_mean"]
+    pi_z_OccBin = jnp.mean(pi_z_OccBin, axis=1) - par["pi_OccBin_ergodic_mean"]
+    i_z_OccBin = jnp.mean(i_z_OccBin, axis=1) - par["i_OccBin_ergodic_mean"]
+
+    # ln_Gamma
+    states_ln_Gamma = states_ln_Gamma_.reshape(-1, 3)
+    Y_ln_Gamma, pi_ln_Gamma = eval_nn(par, train, linear, nn, states_ln_Gamma, T*N)
+    i_ln_Gamma = taylor_rule(par, Y_ln_Gamma, pi_ln_Gamma, states_ln_Gamma[..., 0], states_ln_Gamma[..., 1], states_ln_Gamma[..., 2], 0.00, 0.00, par["ZLB"], 0.00)
+    
+    Y_ln_Gamma, pi_ln_Gamma, i_ln_Gamma = Y_ln_Gamma.reshape(T, N), pi_ln_Gamma.reshape(T, N), i_ln_Gamma.reshape(T, N)
+    i_ln_Gamma_ZLB = jnp.mean(i_ln_Gamma <= par["ZLB"], axis=1)
+    Y_ln_Gamma = (jnp.mean(Y_ln_Gamma, axis=1) - par["Y_ergodic_mean"])/par["Y_ergodic_mean"]
+    pi_ln_Gamma = jnp.mean(pi_ln_Gamma, axis=1) - par["pi_ergodic_mean"]
+    i_ln_Gamma = jnp.mean(i_ln_Gamma, axis=1) - par["i_ergodic_mean"]
+    
+    Y_ln_Gamma_OccBin, pi_ln_Gamma_OccBin, i_ln_Gamma_OccBin = eval_OccBin(model, states_ln_Gamma_, return_dev=False, return_i=True)
+    i_ln_Gamma_ZLB_OccBin = jnp.mean(i_ln_Gamma_OccBin <= par["ZLB"], axis=1)
+    Y_ln_Gamma_OccBin = (jnp.mean(Y_ln_Gamma_OccBin, axis=1) - par["Y_OccBin_ergodic_mean"])/par["Y_OccBin_ergodic_mean"]
+    pi_ln_Gamma_OccBin = jnp.mean(pi_ln_Gamma_OccBin, axis=1) - par["pi_OccBin_ergodic_mean"]
+    i_ln_Gamma_OccBin = jnp.mean(i_ln_Gamma_OccBin, axis=1) - par["i_OccBin_ergodic_mean"]
+
+    GIRF = SimpleNamespace()
+
+    GIRF.Y_u, GIRF.Y_z, GIRF.Y_ln_Gamma = Y_u, Y_z, Y_ln_Gamma
+    GIRF.pi_u, GIRF.pi_z, GIRF.pi_ln_Gamma = pi_u, pi_z, pi_ln_Gamma
+    GIRF.i_u, GIRF.i_z, GIRF.i_ln_Gamma = i_u, i_z, i_ln_Gamma
+    GIRF.i_u_ZLB, GIRF.i_z_ZLB, GIRF.i_ln_Gamma_ZLB = i_u_ZLB, i_z_ZLB, i_ln_Gamma_ZLB
+
+    GIRF.Y_u_OccBin, GIRF.Y_z_OccBin, GIRF.Y_ln_Gamma_OccBin = Y_u_OccBin, Y_z_OccBin, Y_ln_Gamma_OccBin
+    GIRF.pi_u_OccBin, GIRF.pi_z_OccBin, GIRF.pi_ln_Gamma_OccBin = pi_u_OccBin, pi_z_OccBin, pi_ln_Gamma_OccBin
+    GIRF.i_u_OccBin, GIRF.i_z_OccBin, GIRF.i_ln_Gamma_OccBin = i_u_OccBin, i_z_OccBin, i_ln_Gamma_OccBin
+    GIRF.i_u_ZLB_OccBin, GIRF.i_z_ZLB_OccBin, GIRF.i_ln_Gamma_ZLB_OccBin = i_u_ZLB_OccBin, i_z_ZLB_OccBin, i_ln_Gamma_ZLB_OccBin
+
+    GIRF.T = T
+
+    model.GIRF = GIRF
+
+
+############################
+# GAUSS-HERMITE QUADRATURE #
+############################
 
 def construct_gh_nodes(dtype, gh_n_per_shock, sigma_quad):
 

@@ -217,8 +217,6 @@ class RANK_model:
 
         Y_DSS = par["Y_DSS"]
 
-        Y_interp_OccBin, pi_interp_OccBin = linear["Y_interp_OccBin"], linear["pi_interp_OccBin"]
-
         rho_u = par["rho_u"]
         rho_z = par["rho_z"]
         rho_Gamma = par["rho_Gamma"]

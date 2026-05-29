@@ -148,7 +148,7 @@ def compute_SSS(par, train, linear, nn, states, N):
 
   return Y_SSS.item(), pi_SSS.item()
 
-def eval_nn_dev(par, train, linear, nn, states, N, return_i=False, ZLB=-1):
+def eval_nn_dev(par, train, linear, nn, states, N, return_i=False):
 
   Y_raw, pi_raw = eval_nn(par, train, linear, nn, states, N)
   
@@ -158,7 +158,7 @@ def eval_nn_dev(par, train, linear, nn, states, N, return_i=False, ZLB=-1):
   pi_dev = pi_raw-pi_SSS
 
   if return_i:
-    i = taylor_rule(par, Y_raw, pi_raw, states[..., 0], states[..., 1], states[..., 2], 0.0, 0.0, ZLB, 0.00)
+    i = taylor_rule(par, Y_raw, pi_raw, states[..., 0], states[..., 1], states[..., 2], 0.0, 0.0, par["ZLB"], 0.00)
     i_SSS = taylor_rule(par, Y_SSS, pi_SSS, 0.00, 0.00, 0.00, 0.0, 0.0, par["ZLB"], 0.00)
     i_dev = i - i_SSS
 
